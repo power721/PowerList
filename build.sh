@@ -1,5 +1,5 @@
 set -e
-appName="openlist"
+appName="alist"
 builtAt="$(date +'%F %T %z')"
 gitAuthor="power721"
 gitCommit=$(git log --pretty=format:"%h" -1)

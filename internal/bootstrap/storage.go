@@ -8,9 +8,8 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/drivers/aliyundrive_share2_open"
 	baidu_share "github.com/OpenListTeam/OpenList/v4/drivers/baidu_share2"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
-	"github.com/OpenListTeam/OpenList/v4/drivers/quark_share"
+	"github.com/OpenListTeam/OpenList/v4/drivers/quark_uc_share"
 	"github.com/OpenListTeam/OpenList/v4/drivers/thunder_share"
-	"github.com/OpenListTeam/OpenList/v4/drivers/uc_share"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	log "github.com/sirupsen/logrus"
 	"strconv"
@@ -171,7 +170,7 @@ func validateQuarkShares(wg *sync.WaitGroup) {
 	storages := op.GetStorages("QuarkShare")
 	log.Infof("validate %v Quark shares", len(storages))
 	for _, storage := range storages {
-		driver := storage.(*quark_share.QuarkShare)
+		driver := storage.(*quark_uc_share.QuarkUCShare)
 		if driver.ID < baseId {
 			continue
 		}
@@ -190,7 +189,7 @@ func validateUcShares(wg *sync.WaitGroup) {
 	storages := op.GetStorages("UCShare")
 	log.Infof("validate %v UC shares", len(storages))
 	for _, storage := range storages {
-		driver := storage.(*uc_share.UcShare)
+		driver := storage.(*quark_uc_share.QuarkUCShare)
 		if driver.ID < baseId {
 			continue
 		}

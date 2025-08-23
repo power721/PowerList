@@ -1,4 +1,4 @@
-package uc_share
+package quark_uc_share
 
 import (
 	"context"
@@ -20,29 +20,35 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) uc-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.4-b478491100 Safari/537.36 Channel/pckk_other_ch"
-const Referer = "https://fast.uc.cn/"
-
 var Cookie = ""
 var idx = 0
 
-func (d *UcShare) request(pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
-	driver := op.GetFirstDriver("UC", idx)
+func (d *QuarkUCShare) getDriverName() string {
+	name := "Quark"
+	if d.config.Name == "UCShare" {
+		name = "UC"
+	}
+	return name
+}
+
+func (d *QuarkUCShare) request(pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
+	name := d.getDriverName()
+	driver := op.GetFirstDriver(name, idx)
 	if driver != nil {
 		uc := driver.(*quark.QuarkOrUC)
 		return uc.Request(pathname, method, callback, resp)
 	}
 
-	u := "https://pc-api.uc.cn/1/clouddrive" + pathname
+	u := d.conf.api + pathname
 	req := base.RestyClient.R()
 	req.SetHeaders(map[string]string{
 		"Cookie":     Cookie,
 		"Accept":     "application/json, text/plain, */*",
-		"User-Agent": UA,
-		"Referer":    Referer,
+		"User-Agent": d.conf.ua,
+		"Referer":    d.conf.referer,
 	})
+	req.SetQueryParam("pr", d.conf.pr)
 	req.SetQueryParam("entry", "ft")
-	req.SetQueryParam("pr", "UCBrowser")
 	req.SetQueryParam("fr", "pc")
 	if callback != nil {
 		callback(req)
@@ -67,7 +73,7 @@ func (d *UcShare) request(pathname string, method string, callback base.ReqCallb
 	return res.Body(), nil
 }
 
-func (d *UcShare) GetFiles(parent string) ([]File, error) {
+func (d *QuarkUCShare) GetFiles(parent string) ([]File, error) {
 	files := make([]File, 0)
 	page := 1
 	size := 100
@@ -97,11 +103,11 @@ func (d *UcShare) GetFiles(parent string) ([]File, error) {
 	return files, nil
 }
 
-func (d *UcShare) Validate() error {
+func (d *QuarkUCShare) Validate() error {
 	return d.getShareToken()
 }
 
-func (d *UcShare) getShareToken() error {
+func (d *QuarkUCShare) getShareToken() error {
 	data := base.Json{
 		"pwd_id":             d.ShareId,
 		"passcode":           d.SharePwd,
@@ -120,35 +126,40 @@ func (d *UcShare) getShareToken() error {
 		return errors.New(errRes.Message)
 	}
 	d.ShareToken = resp.Data.ShareToken
+	op.MustSaveDriverStorage(d)
 	log.Debugf("getShareToken: %v %v", d.ShareId, d.ShareToken)
 	return nil
 }
 
-func (d *UcShare) saveFile(uc *quark.QuarkOrUC, id string) (model.Obj, error) {
+func (d *QuarkUCShare) saveFile(quark *quark.QuarkOrUC, id string) (model.Obj, error) {
 	s := strings.Split(id, "-")
 	fileId := s[0]
 	fileTokenId := s[1]
 	data := base.Json{
 		"fid_list":       []string{fileId},
 		"fid_token_list": []string{fileTokenId},
-		"to_pdir_fid":    uc.TempDirId,
+		"exclude_fids":   []string{},
+		"to_pdir_fid":    quark.TempDirId,
 		"pwd_id":         d.ShareId,
 		"stoken":         d.ShareToken,
 		"pdir_fid":       "0",
+		"pdir_save_all":  false,
 		"scene":          "link",
 	}
 	query := map[string]string{
-		"pr":    "UCBrowser",
-		"fr":    "pc",
-		"entry": "ft",
+		"pr":           d.conf.pr,
+		"fr":           "pc",
+		"uc_param_str": "",
+		"__dt":         strconv.Itoa(rand.Int()),
+		"__t":          strconv.FormatInt(time.Now().Unix(), 10),
 	}
 	var resp SaveResp
 	res, err := d.request("/share/sharepage/save", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(data).SetQueryParams(query)
 	}, &resp)
-	log.Debugf("[%v] save Quark file: %v %v", uc.ID, id, string(res))
+	log.Debugf("saveFile: %v %+v response: %v", id, data, string(res))
 	if err != nil {
-		log.Warnf("[%v] save file failed: %v", uc.ID, err)
+		log.Warnf("save file failed: %v", err)
 		return nil, err
 	}
 	if resp.Status != 200 {
@@ -162,7 +173,7 @@ func (d *UcShare) saveFile(uc *quark.QuarkOrUC, id string) (model.Obj, error) {
 		return nil, err
 	}
 	log.Debugf("new file id: %v dirId: %v", newFileId, dirId)
-	file, err := uc.GetTempFile(dirId, newFileId)
+	file, err := quark.GetTempFile(dirId, newFileId)
 	if err != nil {
 		log.Warnf("get temp file failed: %v", err)
 		return nil, err
@@ -171,11 +182,11 @@ func (d *UcShare) saveFile(uc *quark.QuarkOrUC, id string) (model.Obj, error) {
 	return file, nil
 }
 
-func (d *UcShare) getSaveTaskResult(taskId string) (string, string, error) {
+func (d *QuarkUCShare) getSaveTaskResult(taskId string) (string, string, error) {
 	time.Sleep(200 * time.Millisecond)
-	for retry := 1; retry <= 30; {
+	for retry := 1; retry <= 60; {
 		query := map[string]string{
-			"pr":           "UCBrowser",
+			"pr":           d.conf.pr,
 			"fr":           "pc",
 			"uc_param_str": "",
 			"retry_index":  strconv.Itoa(retry),
@@ -204,50 +215,55 @@ func (d *UcShare) getSaveTaskResult(taskId string) (string, string, error) {
 	return "", "", errors.New("get task result timeout")
 }
 
-func (d *UcShare) getDownloadUrl(ctx context.Context, uc *quark.QuarkOrUC, file model.Obj, args model.LinkArgs) (*model.Link, error) {
-	go d.deleteDelay(uc, file.GetID())
-	return uc.Link(ctx, file, args)
+func (d *QuarkUCShare) getDownloadUrl(ctx context.Context, quark *quark.QuarkOrUC, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	go d.deleteDelay(quark, file.GetID())
+	return quark.Link(ctx, file, args)
 }
 
-func (d *UcShare) deleteDelay(uc *quark.QuarkOrUC, fileId string) {
+func (d *QuarkUCShare) deleteDelay(quark *quark.QuarkOrUC, fileId string) {
 	delayTime := setting.GetInt(conf.DeleteDelayTime, 900)
 	if delayTime == 0 {
 		return
 	}
+	if delayTime < 5 {
+		delayTime = 5
+	}
 
-	delayTime += 5
-	log.Infof("[%v] Delete UC temp file %v after %v seconds.", uc.ID, fileId, delayTime)
+	name := d.getDriverName()
+	log.Infof("[%v] Delete %s temp file %v after %v seconds.", quark.ID, name, fileId, delayTime)
 	time.Sleep(time.Duration(delayTime) * time.Second)
-	d.deleteFile(uc, fileId)
+	d.deleteFile(quark, fileId)
 }
 
-func (d *UcShare) deleteFile(uc *quark.QuarkOrUC, fileId string) {
-	log.Infof("[%v] Delete UC temp file: %v", uc.ID, fileId)
+func (d *QuarkUCShare) deleteFile(quark *quark.QuarkOrUC, fileId string) {
+	name := d.getDriverName()
+	log.Infof("[%v] Delete %s temp file: %v", quark.ID, name, fileId)
 	data := base.Json{
 		"action_type":  1,
 		"exclude_fids": []string{},
 		"filelist":     []string{fileId},
 	}
 	var resp PlayResp
-	res, err := uc.Request("/file/delete", http.MethodPost, func(req *resty.Request) {
+	res, err := quark.Request("/file/delete", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(data)
 	}, &resp)
-	log.Debugf("[%v] Delete UC temp file: %v %v", uc.ID, fileId, string(res))
+	log.Debugf("[%v] Delete %s temp file: %v %v", quark.ID, name, fileId, string(res))
 	if err != nil {
-		log.Warnf("[%v] Delete UC temp file failed: %v %v", uc.ID, fileId, err)
+		log.Warnf("[%v] Delete %s temp file failed: %v %v", quark.ID, name, fileId, err)
 	} else if resp.Status != 200 {
-		log.Warnf("[%v] Delete UC temp file failed: %v %v", uc.ID, fileId, resp.Message)
+		log.Warnf("[%v] Delete %s temp file failed: %v %v", quark.ID, name, fileId, resp.Message)
 	}
 }
 
-func (d *UcShare) getShareFiles(id string) ([]File, error) {
+func (d *QuarkUCShare) getShareFiles(id string) ([]File, error) {
+	log.Debugf("getShareFiles: %v", id)
 	s := strings.Split(id, "-")
 	fileId := s[0]
 	files := make([]File, 0)
 	page := 1
 	for {
 		query := map[string]string{
-			"pr":            "UCBrowser",
+			"pr":            d.conf.pr,
 			"fr":            "pc",
 			"pwd_id":        d.ShareId,
 			"stoken":        d.ShareToken,
@@ -260,11 +276,13 @@ func (d *UcShare) getShareFiles(id string) ([]File, error) {
 			"_fetch_total":  "1",
 			"_sort":         "file_type:asc," + d.OrderBy + ":" + d.OrderDirection,
 		}
+		log.Debugf("getShareFiles query: %v", query)
 		var resp ListResp
 		res, err := d.request("/share/sharepage/detail", http.MethodGet, func(req *resty.Request) {
 			req.SetQueryParams(query)
 		}, &resp)
-		log.Debugf("UC share get files: %s", string(res))
+		name := d.getDriverName()
+		log.Debugf("%s share get files: %s", name, string(res))
 		if err != nil {
 			if err.Error() == "分享的stoken过期" {
 				d.getShareToken()

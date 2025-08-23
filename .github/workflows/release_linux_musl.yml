@@ -1,0 +1,52 @@
+name: release_linux_musl
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  release_linux_musl:
+    permissions:
+      contents: write
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.21
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write tag version to file
+        run: |
+          echo "${{ github.ref_name }}" > alist.version.txt
+          cat alist.version.txt
+
+      - name: Build
+        run: |
+          bash build.sh release linux_musl
+          ls -lh build/
+          ls -lh build/compress/
+
+      - name: Upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/compress/*
+
+      - name: Send version file
+        env:
+          api: ${{ secrets.VERSION_API }}
+        if: ${{ env.api != '' }}
+        run: |
+          curl -s "${{ env.api }}?type=alist&version=${{ github.ref_name }}"
+
+      - name: Send notification
+        env:
+          api: ${{ secrets.NOTIFY_API }}
+        if: ${{ env.api != '' }}
+        run: |
+          curl -s "${{ env.api }}?type=alist&version=${{ github.ref_name }}"

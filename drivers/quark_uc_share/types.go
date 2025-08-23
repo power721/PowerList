@@ -1,4 +1,4 @@
-package uc_share
+package quark_uc_share
 
 import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
