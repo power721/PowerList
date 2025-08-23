@@ -166,7 +166,7 @@ func (d *QuarkOrUC) getTranscodingLink(file model.Obj) (*model.Link, error) {
 	var resp TranscodingResp
 	ua := d.conf.ua
 
-	_, err := d.request("/file/v2/play/project", http.MethodPost, func(req *resty.Request) {
+	res, err := d.request("/file/v2/play/project", http.MethodPost, func(req *resty.Request) {
 		req.SetHeader("User-Agent", ua).
 			SetBody(data)
 	}, &resp)
@@ -174,12 +174,28 @@ func (d *QuarkOrUC) getTranscodingLink(file model.Obj) (*model.Link, error) {
 		return nil, err
 	}
 
-	return &model.Link{
-		URL:           resp.Data.VideoList[0].VideoInfo.URL,
-		ContentLength: resp.Data.VideoList[0].VideoInfo.Size,
-		Concurrency:   3,
-		PartSize:      10 * utils.MB,
-	}, nil
+	log.Debugf("transcoding link response: %v", string(res))
+	var size int64
+	url := ""
+	for _, info := range resp.Data.VideoList {
+		if info.VideoInfo.URL != "" {
+			if info.VideoInfo.Size > size {
+				size = info.VideoInfo.Size
+				url = info.VideoInfo.URL
+			}
+		}
+	}
+
+	if url != "" {
+		return &model.Link{
+			URL:           url + fmt.Sprintf("#storageId=%d", d.ID),
+			ContentLength: size,
+			Concurrency:   d.Concurrency,
+			PartSize:      d.ChunkSize * utils.KB,
+		}, nil
+	}
+
+	return d.getDownloadLink(file)
 }
 
 func (d *QuarkOrUC) upPre(file model.FileStreamer, parentId string) (UpPreResp, error) {

@@ -231,8 +231,8 @@ func (d *QuarkUCTV) getTranscodingLink(ctx context.Context, file model.Obj) (*mo
 
 	return &model.Link{
 		URL:           fileLink.Data.VideoInfo[0].URL,
-		Concurrency:   3,
-		PartSize:      10 * utils.MB,
+		Concurrency:   d.Concurrency,
+		PartSize:      d.ChunkSize * utils.KB,
 		ContentLength: fileLink.Data.VideoInfo[0].Size,
 	}, nil
 }

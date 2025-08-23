@@ -9,7 +9,29 @@ import (
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
 	"net/http"
+	"strings"
+	"time"
 )
+
+func (d *QuarkOrUC) getVipInfo() {
+	query := map[string]string{
+		"pr":              d.conf.pr,
+		"fr":              "pc",
+		"uc_param_str":    "",
+		"fetch_subscribe": "true",
+		"_ch":             "home",
+		"fetch_identity":  "true",
+	}
+	res, err := d.request("/member", http.MethodGet, func(req *resty.Request) {
+		req.SetQueryParams(query)
+	}, nil)
+	if err != nil {
+		log.Error(err)
+	}
+	memberType := utils.Json.Get(res, "data", "member_type").ToString()
+	log.Infof("[%d] %s member type: %v", d.ID, d.config.Name, memberType)
+	d.VIP = strings.Contains(memberType, "VIP")
+}
 
 func (d *QuarkOrUC) getTempFolder() {
 	files, err := d.GetFiles("0")
@@ -65,15 +87,18 @@ func (d *QuarkOrUC) cleanTempFolder() {
 }
 
 func (d *QuarkOrUC) GetTempFile(dirId, id string) (model.Obj, error) {
-	files, err := d.GetFiles(dirId)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, file := range files {
-		if file.GetID() == id {
-			return file, nil
+	for i := 0; i < 3; i++ {
+		files, err := d.GetFiles(dirId)
+		if err != nil {
+			return nil, err
 		}
+
+		for _, file := range files {
+			if file.GetID() == id {
+				return file, nil
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	return nil, errors.New("file not found")
