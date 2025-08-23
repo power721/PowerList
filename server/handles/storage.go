@@ -2,6 +2,7 @@ package handles
 
 import (
 	"context"
+	"github.com/OpenListTeam/OpenList/v4/internal/bootstrap"
 	"strconv"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -30,6 +31,30 @@ func ListStorages(c *gin.Context) {
 		Content: storages,
 		Total:   total,
 	})
+}
+
+func GetFailedStorages(c *gin.Context) {
+	var req model.PageReq
+	if err := c.ShouldBind(&req); err != nil {
+		common.ErrorResp(c, err, 400)
+		return
+	}
+	req.Validate()
+	log.Debugf("%+v", req)
+	storages, total, err := db.GetFailedStorages(req.Page, req.PerPage)
+	if err != nil {
+		common.ErrorResp(c, err, 500)
+		return
+	}
+	common.SuccessResp(c, common.PageResp{
+		Content: storages,
+		Total:   total,
+	})
+}
+
+func ValidateStorages(c *gin.Context) {
+	go bootstrap.Validate()
+	common.SuccessResp(c)
 }
 
 func CreateStorage(c *gin.Context) {
@@ -98,6 +123,20 @@ func EnableStorage(c *gin.Context) {
 		return
 	}
 	if err := op.EnableStorage(c.Request.Context(), uint(id)); err != nil {
+		common.ErrorResp(c, err, 500, true)
+		return
+	}
+	common.SuccessResp(c)
+}
+
+func ReloadStorage(c *gin.Context) {
+	idStr := c.Query("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		common.ErrorResp(c, err, 400)
+		return
+	}
+	if err := op.ReloadStorage(c, uint(id)); err != nil {
 		common.ErrorResp(c, err, 500, true)
 		return
 	}

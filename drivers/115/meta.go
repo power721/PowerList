@@ -12,6 +12,10 @@ type Addition struct {
 	PageSize     int64   `json:"page_size" type:"number" default:"1000" help:"list api per page size of 115 driver"`
 	LimitRate    float64 `json:"limit_rate" type:"float" default:"2" help:"limit all api request rate ([limit]r/1s)"`
 	driver.RootID
+
+	Concurrency int    `json:"concurrency" type:"number" default:"2"`
+	ChunkSize   int    `json:"chunk_size" type:"number" default:"1024"`
+	DeleteCode  string `json:"delete_code" type:"text"`
 }
 
 var config = driver.Config{

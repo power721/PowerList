@@ -122,6 +122,12 @@ func admin(g *gin.RouterGroup) {
 	meta.POST("/update", handles.UpdateMeta)
 	meta.POST("/delete", handles.DeleteMeta)
 
+	token := g.Group("/token")
+	token.GET("/list", handles.GetTokens)
+	token.GET("/get", handles.GetToken)
+	token.POST("/update", handles.UpdateToken)
+	token.POST("/delete", handles.DeleteToken)
+
 	user := g.Group("/user")
 	user.GET("/list", handles.ListUsers)
 	user.GET("/get", handles.GetUser)
@@ -135,12 +141,15 @@ func admin(g *gin.RouterGroup) {
 
 	storage := g.Group("/storage")
 	storage.GET("/list", handles.ListStorages)
+	storage.GET("/failed", handles.GetFailedStorages)
+	storage.POST("/failed", handles.ValidateStorages)
 	storage.GET("/get", handles.GetStorage)
 	storage.POST("/create", handles.CreateStorage)
 	storage.POST("/update", handles.UpdateStorage)
 	storage.POST("/delete", handles.DeleteStorage)
 	storage.POST("/enable", handles.EnableStorage)
 	storage.POST("/disable", handles.DisableStorage)
+	storage.POST("/reload", handles.ReloadStorage)
 	storage.POST("/load_all", handles.LoadAllStorages)
 
 	driver := g.Group("/driver")
@@ -151,6 +160,7 @@ func admin(g *gin.RouterGroup) {
 	setting := g.Group("/setting")
 	setting.GET("/get", handles.GetSetting)
 	setting.GET("/list", handles.ListSettings)
+	setting.POST("/update", handles.SaveSetting)
 	setting.POST("/save", handles.SaveSettings)
 	setting.POST("/delete", handles.DeleteSetting)
 	setting.POST("/default", handles.DefaultSettings)

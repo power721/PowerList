@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"fmt"
+	"github.com/OpenListTeam/OpenList/v4/internal/bootstrap/patch/v3_24_0"
 
 	"strings"
 
@@ -41,6 +42,7 @@ func compareVersion(majorA, minorA, patchNumA, majorB, minorB, patchNumB int) bo
 }
 
 func InitUpgradePatch() {
+	v3_24_0.HashPwdForOldVersion()
 	if !strings.HasPrefix(conf.Version, "v") {
 		for _, vp := range patch.UpgradePatches {
 			for i, p := range vp.Patches {

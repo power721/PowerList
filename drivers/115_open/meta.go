@@ -14,6 +14,9 @@ type Addition struct {
 	LimitRate      float64 `json:"limit_rate" type:"float" default:"1" help:"limit all api request rate ([limit]r/1s)"`
 	AccessToken    string  `json:"access_token" required:"true"`
 	RefreshToken   string  `json:"refresh_token" required:"true"`
+
+	Concurrency int `json:"concurrency" type:"number" default:"2"`
+	ChunkSize   int `json:"chunk_size" type:"number" default:"1024"`
 }
 
 var config = driver.Config{

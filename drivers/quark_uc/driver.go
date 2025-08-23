@@ -23,6 +23,8 @@ type QuarkOrUC struct {
 	Addition
 	config driver.Config
 	conf   Conf
+
+	TempDirId string
 }
 
 func (d *QuarkOrUC) Config() driver.Config {
@@ -44,6 +46,7 @@ func (d *QuarkOrUC) Init(ctx context.Context) error {
 			}
 		}
 	}
+	d.getTempFolder()
 	return err
 }
 

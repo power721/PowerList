@@ -52,6 +52,9 @@ type ExpertAddition struct {
 	UseFluentPlay bool `json:"use_fluent_play" default:"false" help:"use fluent play for offline download,only magnet links supported"`
 	// 移除方式
 	RemoveWay string `json:"remove_way" required:"true" type:"select" options:"trash,delete"`
+
+	Concurrency int `json:"concurrency" type:"number" default:"2"`
+	ChunkSize   int `json:"chunk_size" type:"number" default:"1024"`
 }
 
 // GetIdentity 登录特征,用于判断是否重新登录
@@ -89,6 +92,9 @@ type Addition struct {
 	// 离线下载是否使用 流畅播(Fluent Play)接口
 	UseFluentPlay bool   `json:"use_fluent_play" default:"false" help:"use fluent play for offline download,only magnet links supported"`
 	RemoveWay     string `json:"remove_way" required:"true" type:"select" options:"trash,delete"`
+
+	Concurrency int `json:"concurrency" type:"number" default:"2"`
+	ChunkSize   int `json:"chunk_size" type:"number" default:"1024"`
 }
 
 // GetIdentity 登录特征,用于判断是否重新登录

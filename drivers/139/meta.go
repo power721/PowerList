@@ -14,6 +14,9 @@ type Addition struct {
 	CustomUploadPartSize int64  `json:"custom_upload_part_size" type:"number" default:"0" help:"0 for auto"`
 	ReportRealSize       bool   `json:"report_real_size" type:"bool" default:"true" help:"Enable to report the real file size during upload"`
 	UseLargeThumbnail    bool   `json:"use_large_thumbnail" type:"bool" default:"false" help:"Enable to use large thumbnail for images"`
+
+	Concurrency int `json:"concurrency" type:"number" default:"4"`
+	ChunkSize   int `json:"chunk_size" type:"number" default:"512"`
 }
 
 var config = driver.Config{

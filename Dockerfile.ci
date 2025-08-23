@@ -1,6 +1,6 @@
 ARG BASE_IMAGE_TAG=base
-FROM ghcr.io/openlistteam/openlist-base-image:${BASE_IMAGE_TAG}
-LABEL MAINTAINER="OpenList"
+FROM xiaoyaliu/alist:latest
+LABEL MAINTAINER="power721"
 ARG TARGETPLATFORM
 ARG INSTALL_FFMPEG=false
 ARG INSTALL_ARIA2=false
@@ -17,7 +17,6 @@ RUN addgroup -g ${GID} ${USER} && \
 COPY --chmod=755 --chown=${UID}:${GID} /build/${TARGETPLATFORM}/openlist ./
 COPY --chmod=755 --chown=${UID}:${GID} entrypoint.sh /entrypoint.sh
 
-USER ${USER}
 RUN /entrypoint.sh version
 
 ENV UMASK=022 RUN_ARIA2=${INSTALL_ARIA2}

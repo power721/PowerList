@@ -16,6 +16,9 @@ type Addition struct {
 	QueryToken string `json:"query_token" required:"false" default:"" help:"don't edit'"`
 	// 视频文件链接获取方式 download(可获取源视频) or streaming(获取转码后的视频)
 	VideoLinkMethod string `json:"link_method" required:"true" type:"select" options:"download,streaming" default:"download"`
+
+	Concurrency int `json:"concurrency" type:"number" default:"4"`
+	ChunkSize   int `json:"chunk_size" type:"number" default:"256"`
 }
 
 type Conf struct {

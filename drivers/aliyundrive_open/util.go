@@ -5,7 +5,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/OpenListTeam/OpenList/v4/internal/setting"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,60 +22,30 @@ import (
 
 // do others that not defined in Driver interface
 
-func (d *AliyundriveOpen) _refreshToken(ctx context.Context) (string, string, error) {
-	if d.UseOnlineAPI && d.APIAddress != "" {
-		u := d.APIAddress
-		var resp struct {
-			RefreshToken string `json:"refresh_token"`
-			AccessToken  string `json:"access_token"`
-			ErrorMessage string `json:"text"`
-		}
+func (d *AliyundriveOpen) _refreshToken(force, vip bool) (string, string, error) {
+	accountId := strconv.Itoa(d.AccountId)
+	accessTokenOpen := token.GetToken("AccessTokenOpen-"+accountId, 7200)
+	refreshTokenOpen := token.GetToken("RefreshTokenOpen-"+accountId, 0)
+	log.Debugf("[%v] accountID: %v force: %v accessTokenOpen: %v refreshTokenOpen: %v", d.ID, accountId, force, accessTokenOpen, refreshTokenOpen)
+	if !force && accessTokenOpen != "" && refreshTokenOpen != "" {
+		d.RefreshToken, d.AccessToken = refreshTokenOpen, accessTokenOpen
+		log.Debugf("[%v] 开放token已经存在", d.ID)
+		return refreshTokenOpen, accessTokenOpen, nil
+	}
 
-		// 根据AlipanType选项设置driver_txt
-		driverTxt := "alicloud_qr"
-		if d.AlipanType == "alipanTV" {
-			driverTxt = "alicloud_tv"
-		}
-		err := d.wait(ctx, limiterOther)
-		if err != nil {
-			return "", "", err
-		}
-		_, err = base.RestyClient.R().
-			SetHeader("User-Agent", "Mozilla/5.0 (Macintosh; Apple macOS 15_5) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36 Chrome/138.0.0.0 Openlist/425.6.30").
-			SetResult(&resp).
-			SetQueryParams(map[string]string{
-				"refresh_ui": d.RefreshToken,
-				"server_use": "true",
-				"driver_txt": driverTxt,
-			}).
-			Get(u)
-		if err != nil {
-			return "", "", err
-		}
-		if resp.RefreshToken == "" || resp.AccessToken == "" {
-			if resp.ErrorMessage != "" {
-				return "", "", fmt.Errorf("failed to refresh token: %s", resp.ErrorMessage)
-			}
-			return "", "", fmt.Errorf("empty token returned from official API, a wrong refresh token may have been used")
-		}
-		return resp.RefreshToken, resp.AccessToken, nil
+	t := time.Now()
+	url := setting.GetStr("open_token_url", API_URL+"/oauth/access_token")
+	if vip && d.IsVip {
+		url = "http://127.0.0.1:4567/ali/access_token"
 	}
-	// 本地刷新逻辑，必须要求 client_id 和 client_secret
-	if d.ClientID == "" || d.ClientSecret == "" {
-		return "", "", fmt.Errorf("empty ClientID or ClientSecret")
-	}
-	err := d.wait(ctx, limiterOther)
-	if err != nil {
-		return "", "", err
-	}
-	url := API_URL + "/oauth/access_token"
+	log.Infof("[%v] refreshOpenToken: %v", d.ID, url)
 	//var resp base.TokenResp
 	var e ErrResp
 	res, err := base.RestyClient.R().
 		//ForceContentType("application/json").
 		SetBody(base.Json{
-			"client_id":     d.ClientID,
-			"client_secret": d.ClientSecret,
+			"client_id":     setting.GetStr("open_api_client_id"),
+			"client_secret": setting.GetStr("open_api_client_secret"),
 			"grant_type":    "refresh_token",
 			"refresh_token": d.RefreshToken,
 		}).
@@ -101,6 +74,8 @@ func (d *AliyundriveOpen) _refreshToken(ctx context.Context) (string, string, er
 	if curSub != newSub {
 		return "", "", errors.New("failed to refresh token: sub not match")
 	}
+	d.RefreshToken, d.AccessToken = refresh, access
+	d.SaveOpenToken(t)
 	return refresh, access, nil
 }
 
@@ -116,23 +91,26 @@ func getSub(token string) (string, error) {
 	return utils.Json.Get(bs, "sub").ToString(), nil
 }
 
-func (d *AliyundriveOpen) refreshToken(ctx context.Context) error {
+func (d *AliyundriveOpen) refreshToken(force bool) error {
 	if d.ref != nil {
-		return d.ref.refreshToken(ctx)
+		return d.ref.refreshToken(force)
 	}
-	refresh, access, err := d._refreshToken(ctx)
-	for i := 0; i < 3; i++ {
-		if err == nil {
-			break
-		} else {
-			log.Errorf("[ali_open] failed to refresh token: %s", err)
-		}
-		refresh, access, err = d._refreshToken(ctx)
+	refresh, access, err := d._refreshToken(force, true)
+	if err != nil {
+		refresh, access, err = d._refreshToken(force, false)
 	}
+	//for i := 0; i < 3; i++ {
+	//	if err == nil {
+	//		break
+	//	} else {
+	//		log.Errorf("[ali_open] failed to refresh token: %s", err)
+	//	}
+	//	refresh, access, err = d._refreshToken(force)
+	//}
 	if err != nil {
 		return err
 	}
-	log.Infof("[ali_open] token exchange: %s -> %s", d.RefreshToken, refresh)
+	log.Debugf("[ali_open] token exchange: %s -> %s", d.RefreshToken, refresh)
 	d.RefreshToken, d.AccessToken = refresh, access
 	op.MustSaveDriverStorage(d)
 	return nil
@@ -155,10 +133,6 @@ func (d *AliyundriveOpen) requestReturnErrResp(ctx context.Context, limitTy limi
 	}
 	var e ErrResp
 	req.SetError(&e)
-	err := d.wait(ctx, limitTy)
-	if err != nil {
-		return nil, err, nil
-	}
 	res, err := req.Execute(method, API_URL+uri)
 	if err != nil {
 		if res != nil {
@@ -169,7 +143,7 @@ func (d *AliyundriveOpen) requestReturnErrResp(ctx context.Context, limitTy limi
 	isRetry := len(retry) > 0 && retry[0]
 	if e.Code != "" {
 		if !isRetry && (utils.SliceContains([]string{"AccessTokenInvalid", "AccessTokenExpired", "I400JD"}, e.Code) || d.getAccessToken() == "") {
-			err = d.refreshToken(ctx)
+			err = d.refreshToken(true)
 			if err != nil {
 				return nil, err, nil
 			}
