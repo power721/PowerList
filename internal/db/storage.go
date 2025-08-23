@@ -68,3 +68,16 @@ func GetEnabledStorages() ([]model.Storage, error) {
 	}
 	return storages, nil
 }
+
+func GetFailedStorages(pageIndex, pageSize int) ([]model.Storage, int64, error) {
+	storageDB := db.Model(&model.Storage{})
+	var count int64
+	if err := storageDB.Where("status != ?", "work").Count(&count).Error; err != nil {
+		return nil, 0, errors.Wrapf(err, "failed get storages count")
+	}
+	var storages []model.Storage
+	if err := storageDB.Where("status != ?", "work").Order(columnName("order")).Offset((pageIndex - 1) * pageSize).Limit(pageSize).Find(&storages).Error; err != nil {
+		return nil, 0, errors.WithStack(err)
+	}
+	return storages, count, nil
+}

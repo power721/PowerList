@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	_123 "github.com/OpenListTeam/OpenList/v4/drivers/123"
+	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"hash/crc32"
 	"math"
 	"math/rand"
@@ -29,6 +31,8 @@ const (
 	//AuthKeySalt      = "8-8D$sL8gPjom7bk#cY"
 )
 
+var idx = 0
+
 func signPath(path string, os string, version string) (k string, v string) {
 	table := []byte{'a', 'd', 'e', 'f', 'g', 'h', 'l', 'm', 'y', 'i', 'j', 'n', 'o', 'p', 'k', 'q', 'r', 's', 't', 'u', 'b', 'c', 'v', 'w', 's', 'z'}
 	random := fmt.Sprintf("%.f", math.Round(1e7*rand.Float64()))
@@ -53,6 +57,13 @@ func GetApi(rawUrl string) string {
 }
 
 func (d *Pan123Share) request(url string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
+	storage := op.GetFirstDriver("123Pan", idx)
+	if storage != nil {
+		pan123, ok := storage.(*_123.Pan123)
+		if ok {
+			return pan123.Request(url, method, callback, resp)
+		}
+	}
 	if d.ref != nil {
 		return d.ref.Request(url, method, callback, resp)
 	}
@@ -118,3 +129,20 @@ func (d *Pan123Share) getFiles(ctx context.Context, parentId string) ([]File, er
 }
 
 // do others that not defined in Driver interface
+
+func (d *Pan123Share) Validate() error {
+	query := map[string]string{
+		"limit":          "1",
+		"next":           "0",
+		"orderBy":        "file_id",
+		"orderDirection": "desc",
+		"parentFileId":   "0",
+		"Page":           "1",
+		"shareKey":       d.ShareKey,
+		"SharePwd":       d.SharePwd,
+	}
+	_, err := d.request(FileList, http.MethodGet, func(req *resty.Request) {
+		req.SetQueryParams(query)
+	}, nil)
+	return err
+}

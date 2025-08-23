@@ -3,6 +3,8 @@ package _115_open
 import (
 	"context"
 	"fmt"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"net/http"
 	"strconv"
 	"strings"
@@ -41,6 +43,7 @@ func (d *Open115) Init(ctx context.Context) error {
 		sdk.WithOnRefreshToken(func(s1, s2 string) {
 			d.Addition.AccessToken = s1
 			d.Addition.RefreshToken = s2
+			token.SaveAccountToken(conf.OPEN115, d.RefreshToken, int(d.ID))
 			op.MustSaveDriverStorage(d)
 		}))
 	if flags.Debug || flags.Dev {
@@ -123,11 +126,15 @@ func (d *Open115) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 	if !ok {
 		return nil, fmt.Errorf("can't get link")
 	}
+	exp := 4 * time.Hour
 	return &model.Link{
-		URL: u.URL.URL,
+		Expiration: &exp,
+		URL:        u.URL.URL + fmt.Sprintf("#storageId=%d", d.ID),
 		Header: http.Header{
 			"User-Agent": []string{ua},
 		},
+		Concurrency: d.Concurrency,
+		PartSize:    d.ChunkSize * utils.KB,
 	}, nil
 }
 

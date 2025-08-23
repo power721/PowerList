@@ -63,21 +63,33 @@ type TokenResp struct {
 }
 
 func (t *TokenResp) GetToken() string {
+	if t == nil {
+		return ""
+	}
 	return fmt.Sprint(t.TokenType, " ", t.AccessToken)
 }
 
 // GetSpaceToken 获取"超级保险箱" 访问Token
 func (t *TokenResp) GetSpaceToken() string {
+	if t == nil {
+		return ""
+	}
 	return t.Token
 }
 
 type SignInRequest struct {
+	CaptchaToken string `json:"captcha_token"`
+
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
+
+	Username string `json:"username"`
+	Password string `json:"password"`
 
 	Provider    string `json:"provider"`
 	SigninToken string `json:"signin_token"`
 }
+
 type CoreLoginRequest struct {
 	ProtocolVersion string `json:"protocolVersion"`
 	SequenceNo      string `json:"sequenceNo"`

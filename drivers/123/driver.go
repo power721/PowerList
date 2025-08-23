@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"github.com/google/uuid"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,6 +31,7 @@ type Pan123 struct {
 	model.Storage
 	Addition
 	apiRateLimit sync.Map
+	params       Params
 }
 
 func (d *Pan123) Config() driver.Config {
@@ -41,6 +43,29 @@ func (d *Pan123) GetAddition() driver.Additional {
 }
 
 func (d *Pan123) Init(ctx context.Context) error {
+	// 拼接UserAgent
+	if d.PlatformType == "android" {
+		d.params.UserAgent = AndroidUserAgentPrefix + "(" + d.OsVersion + ";" + d.DeviceName + " " + d.DeiveType + ")"
+		d.params.Platform = AndroidPlatformParam
+		d.params.AppVersion = AndroidAppVer
+		d.params.XChannel = AndroidXChannel
+		d.params.XAppVersion = AndroidXAppVer
+
+	} else if d.PlatformType == "tv" {
+		d.params.UserAgent = TVUserAgentPrefix + "(" + d.OsVersion + ";" + d.DeviceName + " " + d.DeiveType + ")"
+		d.params.Platform = TVPlatformParam
+		d.params.AppVersion = TVAndroidAppVer
+	}
+
+	if d.Addition.LoginUuid == "" {
+		d.Addition.LoginUuid = strings.ReplaceAll(uuid.New().String(), "-", "")
+	}
+
+	d.params.OsVersion = d.OsVersion
+	d.params.DeviceName = d.DeviceName
+	d.params.DeviceType = d.DeiveType
+	d.params.LoginUuid = d.Addition.LoginUuid
+
 	_, err := d.Request(UserInfo, http.MethodGet, nil, nil)
 	return err
 }
@@ -64,6 +89,14 @@ func (d *Pan123) List(ctx context.Context, dir model.Obj, args model.ListArgs) (
 
 func (d *Pan123) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	if f, ok := file.(File); ok {
+		//var resp DownResp
+		var headers map[string]string
+		if !utils.IsLocalIPAddr(args.IP) {
+			headers = map[string]string{
+				//"X-Real-IP":       "1.1.1.1",
+				"X-Forwarded-For": args.IP,
+			}
+		}
 		data := base.Json{
 			"driveId":   0,
 			"etag":      f.Etag,
@@ -74,8 +107,7 @@ func (d *Pan123) Link(ctx context.Context, file model.Obj, args model.LinkArgs) 
 			"type":      f.Type,
 		}
 		resp, err := d.Request(DownloadInfo, http.MethodPost, func(req *resty.Request) {
-
-			req.SetBody(data)
+			req.SetBody(data).SetHeaders(headers)
 		}, nil)
 		if err != nil {
 			return nil, err
@@ -102,8 +134,10 @@ func (d *Pan123) Link(ctx context.Context, file model.Obj, args model.LinkArgs) 
 			return nil, err
 		}
 		log.Debug(res.String())
+		exp := 15 * time.Minute
 		link := model.Link{
-			URL: u_,
+			Expiration: &exp,
+			URL:        u_,
 		}
 		log.Debugln("res code: ", res.StatusCode())
 		if res.StatusCode() == 302 {

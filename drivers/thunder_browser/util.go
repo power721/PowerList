@@ -108,6 +108,10 @@ type Common struct {
 
 	// 验证码token刷新成功回调
 	refreshCTokenCk func(token string)
+
+	ID          uint
+	Concurrency int
+	ChunkSize   int
 }
 
 func (c *Common) SetDeviceID(deviceID string) {

@@ -24,10 +24,10 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 
-	cipher "github.com/SheltonZhu/115driver/pkg/crypto/ec115"
-	crypto "github.com/SheltonZhu/115driver/pkg/crypto/m115"
-	driver115 "github.com/SheltonZhu/115driver/pkg/driver"
 	"github.com/pkg/errors"
+	cipher "github.com/power721/115driver/pkg/crypto/ec115"
+	crypto "github.com/power721/115driver/pkg/crypto/m115"
+	driver115 "github.com/power721/115driver/pkg/driver"
 )
 
 // var UserAgent = driver115.UA115Browser

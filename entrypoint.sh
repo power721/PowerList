@@ -3,7 +3,7 @@
 umask ${UMASK}
 
 if [ "$1" = "version" ]; then
-  ./openlist version
+  ./alist version
 else
   # Check file of /opt/openlist/data permissions for current user
   # 检查当前用户是否有当前目录的写和执行权限
@@ -35,5 +35,5 @@ EOF
       rm -rf "$ARIA2_DIR"
     fi
   fi
-  exec ./openlist server --no-prefix
+  exec ./alist server --no-prefix
 fi

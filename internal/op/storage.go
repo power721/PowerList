@@ -3,9 +3,11 @@ package op
 import (
 	"context"
 	"fmt"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"reflect"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +29,120 @@ var storagesMap generic_sync.MapOf[string, driver.Driver]
 
 func GetAllStorages() []driver.Driver {
 	return storagesMap.Values()
+}
+
+func GetStorages(name string) []driver.Driver {
+	storages := storagesMap.Values()
+	var drivers []driver.Driver
+	for _, storage := range storages {
+		if storage.Config().Name == name {
+			drivers = append(drivers, storage)
+		}
+	}
+	return drivers
+}
+
+func Get115Driver(id int) driver.Driver {
+	return GetFirstDriver("115 Cloud", id)
+}
+
+func GetDriverCount(name string) int {
+	count := 0
+	storages := storagesMap.Values()
+	for _, storage := range storages {
+		if storage.Config().Name == name {
+			count++
+		}
+	}
+	return count
+}
+
+func GetFirstDriver(name string, id int) driver.Driver {
+	prefix := ""
+	if GetBool(conf.DriverRoundRobin) {
+		return GetMasterDriver(name, prefix, id)
+	}
+
+	if name == "115 Cloud" {
+		prefix = conf.PAN115
+	} else if name == "Quark" {
+		prefix = conf.QUARK
+	} else if name == "UC" {
+		prefix = conf.UC
+	} else if name == "QuarkTV" {
+		prefix = "QUARK_TV"
+	} else if name == "UCTV" {
+		prefix = "UC_TV"
+	} else if name == "ThunderBrowser" {
+		prefix = "THUNDER"
+	} else if name == "189CloudPC" {
+		prefix = "CLOUD189"
+	} else if name == "139Yun" {
+		prefix = conf.PAN139
+	} else if name == "115 Open" {
+		prefix = conf.OPEN115
+	} else if name == "BaiduNetdisk" {
+		prefix = conf.BAIDU
+	} else if name == "123Pan" {
+		prefix = "PAN123"
+	} else if name == "AliyundriveOpen" {
+		prefix = "ali_account"
+	}
+	return GetMasterDriver(name, prefix, id)
+}
+
+func GetMasterDriver(name, prefix string, id int) driver.Driver {
+	storages := storagesMap.Values()
+	sort.Slice(storages, func(i, j int) bool {
+		return storages[i].GetStorage().ID < storages[j].GetStorage().ID
+	})
+
+	if prefix != "" {
+		id := getMasterId(prefix)
+		log.Infof("Get master id %v for %v", id, prefix)
+		if id > 0 {
+			for _, storage := range storages {
+				if storage.Config().Name == name && storage.GetStorage().ID == id {
+					return storage
+				}
+			}
+		}
+	}
+
+	var drivers []driver.Driver
+	for _, storage := range storages {
+		if storage.Config().Name == name {
+			drivers = append(drivers, storage)
+		}
+	}
+
+	if len(drivers) == 1 {
+		return drivers[0]
+	}
+
+	if len(drivers) > 1 {
+		storage := drivers[id%len(drivers)]
+		log.Debugf("Use storage %v %v %v %v", id, len(drivers), storage.Config().Name, storage.GetStorage().ID)
+		return storage
+	}
+	return nil
+}
+
+func GetBool(key string) bool {
+	val, _ := GetSettingItemByKey(key)
+	return val.Value == "true" || val.Value == "1"
+}
+
+func getMasterId(prefix string) uint {
+	val, err := GetSettingItemByKey(prefix + "_id")
+	if err != nil {
+		return 0
+	}
+	id, err := strconv.Atoi(val.Value)
+	if err != nil {
+		return 0
+	}
+	return uint(id)
 }
 
 func HasStorage(mountPath string) bool {
@@ -95,6 +211,7 @@ func getCurrentGoroutineStack() string {
 
 // initStorage initialize the driver and store to storagesMap
 func initStorage(ctx context.Context, storage model.Storage, storageDriver driver.Driver) (err error) {
+	log.Println("initStorage", storage.Driver, storage.MountPath)
 	storageDriver.SetStorage(storage)
 	driverStorage := storageDriver.GetStorage()
 	defer func() {
@@ -134,6 +251,7 @@ func initStorage(ctx context.Context, storage model.Storage, storageDriver drive
 	if err == nil {
 		err = storageDriver.Init(ctx)
 	}
+	log.Println("Store", driverStorage.Driver, driverStorage.MountPath)
 	storagesMap.Store(driverStorage.MountPath, storageDriver)
 	if err != nil {
 		if IsUseOnlineAPI(storageDriver) {
@@ -141,7 +259,7 @@ func initStorage(ctx context.Context, storage model.Storage, storageDriver drive
 		} else {
 			driverStorage.SetStatus(err.Error())
 		}
-		err = errors.Wrap(err, "failed init storage")
+		err = errors.Wrap(err, "failed init storage: "+driverStorage.MountPath)
 	} else {
 		driverStorage.SetStatus(WORK)
 	}
@@ -179,6 +297,18 @@ func EnableStorage(ctx context.Context, id uint) error {
 	err = db.UpdateStorage(storage)
 	if err != nil {
 		return errors.WithMessage(err, "failed update storage in db")
+	}
+	err = LoadStorage(ctx, *storage)
+	if err != nil {
+		return errors.WithMessage(err, "failed load storage")
+	}
+	return nil
+}
+
+func ReloadStorage(ctx context.Context, id uint) error {
+	storage, err := db.GetStorageById(id)
+	if err != nil {
+		return errors.WithMessage(err, "failed get storage")
 	}
 	err = LoadStorage(ctx, *storage)
 	if err != nil {

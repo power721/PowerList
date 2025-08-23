@@ -9,6 +9,8 @@ const (
 )
 
 const (
+	UA115Browser = "Mozilla/5.0 115Browser/27.0.3.7"
+	UserAgent    = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
 	// site
 	VERSION      = "version"
 	SiteTitle    = "site_title"
@@ -84,8 +86,21 @@ const (
 	ThunderBrowserTempDir = "thunder_browser_temp_dir"
 
 	// single
-	Token         = "token"
-	IndexProgress = "index_progress"
+	Token            = "token"
+	IndexProgress    = "index_progress"
+	DeleteDelayTime  = "delete_delay_time"
+	ExternalPort     = "external_port"
+	QUARK            = "QUARK"
+	UC               = "UC"
+	PAN115           = "PAN115"
+	OPEN115          = "OPEN115"
+	PAN139           = "PAN139"
+	CLOUD189         = "CLOUD189"
+	BAIDU            = "BAIDU"
+	AliTo115         = "ali_to_115"
+	AliAccountId     = "ali_account_id"
+	TempDirName      = "alist-tvbox-temp"
+	DriverRoundRobin = "driver_round_robin"
 
 	// SSO
 	SSOClientId          = "sso_client_id"

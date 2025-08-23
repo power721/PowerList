@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"io"
 	"net/http"
 	"strconv"
@@ -23,6 +25,10 @@ import (
 
 // do others that not defined in Driver interface
 
+func (d *QuarkOrUC) Request(pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
+	return d.request(pathname, method, callback, resp)
+}
+
 func (d *QuarkOrUC) request(pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
 	u := d.conf.api + pathname
 	req := base.RestyClient.R()
@@ -33,6 +39,11 @@ func (d *QuarkOrUC) request(pathname string, method string, callback base.ReqCal
 	})
 	req.SetQueryParam("pr", d.conf.pr)
 	req.SetQueryParam("fr", "pc")
+	if d.config.Name == "UC" {
+		req.SetQueryParam("sys", "darwin")
+		req.SetQueryParam("ve", "1.8.6")
+		req.SetQueryParam("ut", d.Token)
+	}
 	if callback != nil {
 		callback(req)
 	}
@@ -47,15 +58,17 @@ func (d *QuarkOrUC) request(pathname string, method string, callback base.ReqCal
 	}
 	__puus := cookie.GetCookie(res.Cookies(), "__puus")
 	if __puus != nil {
+		log.Debugf("update __puus: %v", __puus)
 		d.Cookie = cookie.SetStr(d.Cookie, "__puus", __puus.Value)
-		op.MustSaveDriverStorage(d)
-	}
-
-	if d.UseTransCodingAddress && d.config.Name == "Quark" {
-		__pus := cookie.GetCookie(res.Cookies(), "__pus")
-		if __pus != nil {
-			d.Cookie = cookie.SetStr(d.Cookie, "__pus", __pus.Value)
-			op.MustSaveDriverStorage(d)
+		d.SaveCookie(d.Cookie)
+	} else {
+		c := res.Request.Header.Get("Cookie")
+		v1 := cookie.GetStr(d.Cookie, "__puus")
+		v2 := cookie.GetStr(c, "__puus")
+		if v2 != "" && v1 != v2 {
+			d.Cookie = cookie.SetStr(d.Cookie, "__puus", v2)
+			log.Debugf("update cookie: %v %v %v", d.Cookie, v1, v2)
+			d.SaveCookie(d.Cookie)
 		}
 	}
 
@@ -63,6 +76,16 @@ func (d *QuarkOrUC) request(pathname string, method string, callback base.ReqCal
 		return nil, errors.New(e.Message)
 	}
 	return res.Body(), nil
+}
+
+func (d *QuarkOrUC) SaveCookie(cookie string) {
+	var key = conf.QUARK
+	if d.config.Name == "UC" {
+		key = conf.UC
+	}
+	d.Cookie = cookie
+	op.MustSaveDriverStorage(d)
+	token.SaveAccountToken(key, d.Cookie, int(d.ID))
 }
 
 func (d *QuarkOrUC) GetFiles(parent string) ([]model.Obj, error) {
@@ -120,16 +143,18 @@ func (d *QuarkOrUC) getDownloadLink(file model.Obj) (*model.Link, error) {
 		return nil, err
 	}
 
-	return &model.Link{
-		URL: resp.Data[0].DownloadUrl,
+	link := &model.Link{
+		URL: resp.Data[0].DownloadUrl + fmt.Sprintf("#storageId=%d", d.ID),
 		Header: http.Header{
 			"Cookie":     []string{d.Cookie},
 			"Referer":    []string{d.conf.referer},
 			"User-Agent": []string{ua},
 		},
-		Concurrency: 3,
-		PartSize:    10 * utils.MB,
-	}, nil
+		Concurrency: d.Concurrency,
+		PartSize:    d.ChunkSize * utils.KB,
+	}
+	log.Debugf("download link: %v", link)
+	return link, nil
 }
 
 func (d *QuarkOrUC) getTranscodingLink(file model.Obj) (*model.Link, error) {
@@ -141,7 +166,7 @@ func (d *QuarkOrUC) getTranscodingLink(file model.Obj) (*model.Link, error) {
 	var resp TranscodingResp
 	ua := d.conf.ua
 
-	_, err := d.request("/file/v2/play/project", http.MethodPost, func(req *resty.Request) {
+	res, err := d.request("/file/v2/play/project", http.MethodPost, func(req *resty.Request) {
 		req.SetHeader("User-Agent", ua).
 			SetBody(data)
 	}, &resp)
@@ -149,12 +174,28 @@ func (d *QuarkOrUC) getTranscodingLink(file model.Obj) (*model.Link, error) {
 		return nil, err
 	}
 
-	return &model.Link{
-		URL:           resp.Data.VideoList[0].VideoInfo.URL,
-		ContentLength: resp.Data.VideoList[0].VideoInfo.Size,
-		Concurrency:   3,
-		PartSize:      10 * utils.MB,
-	}, nil
+	log.Debugf("transcoding link response: %v", string(res))
+	var size int64
+	url := ""
+	for _, info := range resp.Data.VideoList {
+		if info.VideoInfo.URL != "" {
+			if info.VideoInfo.Size > size {
+				size = info.VideoInfo.Size
+				url = info.VideoInfo.URL
+			}
+		}
+	}
+
+	if url != "" {
+		return &model.Link{
+			URL:           url + fmt.Sprintf("#storageId=%d", d.ID),
+			ContentLength: size,
+			Concurrency:   d.Concurrency,
+			PartSize:      d.ChunkSize * utils.KB,
+		}, nil
+	}
+
+	return d.getDownloadLink(file)
 }
 
 func (d *QuarkOrUC) upPre(file model.FileStreamer, parentId string) (UpPreResp, error) {

@@ -1,17 +1,16 @@
 package _115_share
 
 import (
-	"fmt"
 	"strconv"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	driver115 "github.com/SheltonZhu/115driver/pkg/driver"
-	"github.com/pkg/errors"
+	driver115 "github.com/power721/115driver/pkg/driver"
 )
 
 var _ model.Obj = (*FileObj)(nil)
+var idx = 0
 
 type FileObj struct {
 	Size     int64
@@ -61,8 +60,8 @@ func transFunc(sf driver115.ShareFile) (model.Obj, error) {
 	}
 	var (
 		utm    = time.Unix(timeInt, 0)
-		isDir  = (sf.IsFile == 0)
-		fileID = string(sf.FileID)
+		isDir  = sf.IsFile == 0
+		fileID = sf.FileID + "-" + sf.Sha1
 	)
 	if isDir {
 		fileID = string(sf.CategoryID)
@@ -75,37 +74,4 @@ func transFunc(sf driver115.ShareFile) (model.Obj, error) {
 		isDir:    isDir,
 		FileID:   fileID,
 	}, nil
-}
-
-var UserAgent = driver115.UA115Browser
-
-func (d *Pan115Share) login() error {
-	var err error
-	opts := []driver115.Option{
-		driver115.UA(UserAgent),
-	}
-	d.client = driver115.New(opts...)
-	if _, err := d.client.GetShareSnap(d.ShareCode, d.ReceiveCode, ""); err != nil {
-		return errors.Wrap(err, "failed to get share snap")
-	}
-	cr := &driver115.Credential{}
-	if d.QRCodeToken != "" {
-		s := &driver115.QRCodeSession{
-			UID: d.QRCodeToken,
-		}
-		if cr, err = d.client.QRCodeLoginWithApp(s, driver115.LoginApp(d.QRCodeSource)); err != nil {
-			return errors.Wrap(err, "failed to login by qrcode")
-		}
-		d.Cookie = fmt.Sprintf("UID=%s;CID=%s;SEID=%s;KID=%s", cr.UID, cr.CID, cr.SEID, cr.KID)
-		d.QRCodeToken = ""
-	} else if d.Cookie != "" {
-		if err = cr.FromCookie(d.Cookie); err != nil {
-			return errors.Wrap(err, "failed to login by cookies")
-		}
-		d.client.ImportCredential(cr)
-	} else {
-		return errors.New("missing cookie or qrcode account")
-	}
-
-	return d.client.LoginCheck()
 }

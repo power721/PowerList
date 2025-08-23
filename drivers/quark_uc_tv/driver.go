@@ -161,7 +161,7 @@ func (d *QuarkUCTV) Put(ctx context.Context, dstDir model.Obj, stream model.File
 }
 
 type QuarkUCTVCommon struct {
-	AccessToken string
+	AccessToken string `json:"access_token"`
 }
 
 var _ driver.Driver = (*QuarkUCTV)(nil)

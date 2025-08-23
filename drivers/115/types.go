@@ -5,7 +5,7 @@ import (
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	"github.com/SheltonZhu/115driver/pkg/driver"
+	"github.com/power721/115driver/pkg/driver"
 )
 
 var _ model.Obj = (*FileObj)(nil)

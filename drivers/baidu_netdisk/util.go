@@ -4,6 +4,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"net/http"
 	"strconv"
 	"strings"
@@ -23,6 +25,9 @@ import (
 // do others that not defined in Driver interface
 
 func (d *BaiduNetdisk) refreshToken() error {
+	if d.RefreshToken == "" {
+		return nil
+	}
 	err := d._refreshToken()
 	if err != nil && errors.Is(err, errs.EmptyToken) {
 		err = d._refreshToken()
@@ -31,55 +36,15 @@ func (d *BaiduNetdisk) refreshToken() error {
 }
 
 func (d *BaiduNetdisk) _refreshToken() error {
-	// 使用在线API刷新Token，无需ClientID和ClientSecret
-	if d.UseOnlineAPI && len(d.APIAddress) > 0 {
-		u := d.APIAddress
-		var resp struct {
-			RefreshToken string `json:"refresh_token"`
-			AccessToken  string `json:"access_token"`
-			ErrorMessage string `json:"text"`
-		}
-		_, err := base.RestyClient.R().
-			SetHeader("User-Agent", "Mozilla/5.0 (Macintosh; Apple macOS 15_5) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36 Chrome/138.0.0.0 Openlist/425.6.30").
-			SetResult(&resp).
-			SetQueryParams(map[string]string{
-				"refresh_ui": d.RefreshToken,
-				"server_use": "true",
-				"driver_txt": "baiduyun_go",
-			}).
-			Get(u)
-		if err != nil {
-			return err
-		}
-		if resp.RefreshToken == "" || resp.AccessToken == "" {
-			if resp.ErrorMessage != "" {
-				return fmt.Errorf("failed to refresh token: %s", resp.ErrorMessage)
-			}
-			return fmt.Errorf("empty token returned from official API, a wrong refresh token may have been used")
-		}
-		d.AccessToken = resp.AccessToken
-		d.RefreshToken = resp.RefreshToken
-		op.MustSaveDriverStorage(d)
-		return nil
-	}
-	// 使用本地客户端的情况下检查是否为空
-	if d.ClientID == "" || d.ClientSecret == "" {
-		return fmt.Errorf("empty ClientID or ClientSecret")
-	}
-	// 走原有的刷新逻辑
 	u := "https://openapi.baidu.com/oauth/2.0/token"
 	var resp base.TokenResp
 	var e TokenErrResp
-	_, err := base.RestyClient.R().
-		SetResult(&resp).
-		SetError(&e).
-		SetQueryParams(map[string]string{
-			"grant_type":    "refresh_token",
-			"refresh_token": d.RefreshToken,
-			"client_id":     d.ClientID,
-			"client_secret": d.ClientSecret,
-		}).
-		Get(u)
+	_, err := base.RestyClient.R().SetResult(&resp).SetError(&e).SetQueryParams(map[string]string{
+		"grant_type":    "refresh_token",
+		"refresh_token": d.RefreshToken,
+		"client_id":     d.ClientID,
+		"client_secret": d.ClientSecret,
+	}).Get(u)
 	if err != nil {
 		return err
 	}
@@ -90,6 +55,7 @@ func (d *BaiduNetdisk) _refreshToken() error {
 		return errs.EmptyToken
 	}
 	d.AccessToken, d.RefreshToken = resp.AccessToken, resp.RefreshToken
+	token.SaveAccountToken(conf.BAIDU, d.RefreshToken, int(d.ID))
 	op.MustSaveDriverStorage(d)
 	return nil
 }
@@ -262,11 +228,15 @@ func (d *BaiduNetdisk) linkCrackVideo(file model.Obj, _ model.LinkArgs) (*model.
 		return nil, err
 	}
 
+	exp := 1 * time.Hour
 	return &model.Link{
-		URL: utils.Json.Get(resp, "info", "dlink").ToString(),
+		Expiration: &exp,
+		URL:        utils.Json.Get(resp, "info", "dlink").ToString() + fmt.Sprintf("#storageId=%d", d.ID),
 		Header: http.Header{
 			"User-Agent": []string{d.CustomCrackUA},
 		},
+		Concurrency: d.Concurrency,
+		PartSize:    d.ChunkSize * utils.KB,
 	}, nil
 }
 

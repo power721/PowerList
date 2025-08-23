@@ -1,26 +1,25 @@
 ARG BASE_IMAGE_TAG=base
-FROM ghcr.io/openlistteam/openlist-base-image:${BASE_IMAGE_TAG}
-LABEL MAINTAINER="OpenList"
+FROM xiaoyaliu/alist:latest
+LABEL MAINTAINER="power721"
 ARG TARGETPLATFORM
 ARG INSTALL_FFMPEG=false
 ARG INSTALL_ARIA2=false
-ARG USER=openlist
+ARG USER=alist
 ARG UID=1001
 ARG GID=1001
 
-WORKDIR /opt/openlist/
+WORKDIR /opt/alist/
 
 RUN addgroup -g ${GID} ${USER} && \
     adduser -D -u ${UID} -G ${USER} ${USER} && \
-    mkdir -p /opt/openlist/data
+    mkdir -p /opt/alist/data
 
-COPY --chmod=755 --chown=${UID}:${GID} /build/${TARGETPLATFORM}/openlist ./
+COPY --chmod=755 --chown=${UID}:${GID} /build/${TARGETPLATFORM}/alist ./
 COPY --chmod=755 --chown=${UID}:${GID} entrypoint.sh /entrypoint.sh
 
-USER ${USER}
 RUN /entrypoint.sh version
 
 ENV UMASK=022 RUN_ARIA2=${INSTALL_ARIA2}
-VOLUME /opt/openlist/data/
+VOLUME /opt/alist/data/
 EXPOSE 5244 5245
 CMD [ "/entrypoint.sh" ]

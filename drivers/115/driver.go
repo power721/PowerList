@@ -2,16 +2,20 @@ package _115
 
 import (
 	"context"
+	"fmt"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	log "github.com/sirupsen/logrus"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	streamPkg "github.com/OpenListTeam/OpenList/v4/internal/stream"
 	"github.com/OpenListTeam/OpenList/v4/pkg/http_range"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	driver115 "github.com/SheltonZhu/115driver/pkg/driver"
 	"github.com/pkg/errors"
+	driver115 "github.com/power721/115driver/pkg/driver"
 	"golang.org/x/time/rate"
 )
 
@@ -21,6 +25,9 @@ type Pan115 struct {
 	client     *driver115.Pan115Client
 	limiter    *rate.Limiter
 	appVerOnce sync.Once
+
+	TempDirId    string
+	ReceiveDirId string
 }
 
 func (d *Pan115) Config() driver.Config {
@@ -36,7 +43,12 @@ func (d *Pan115) Init(ctx context.Context) error {
 	if d.LimitRate > 0 {
 		d.limiter = rate.NewLimiter(rate.Limit(d.LimitRate), 1)
 	}
-	return d.login()
+	err := d.login()
+	if err != nil {
+		return err
+	}
+	d.createTempDir(ctx)
+	return nil
 }
 
 func (d *Pan115) WaitLimit(ctx context.Context) error {
@@ -67,16 +79,25 @@ func (d *Pan115) Link(ctx context.Context, file model.Obj, args model.LinkArgs) 
 	if err := d.WaitLimit(ctx); err != nil {
 		return nil, err
 	}
-	userAgent := args.Header.Get("User-Agent")
+	var userAgent = args.Header.Get("User-Agent")
+	if userAgent == "" {
+		userAgent = conf.UA115Browser
+	}
+
 	downloadInfo, err := d.
 		DownloadWithUA(file.(*FileObj).PickCode, userAgent)
 	if err != nil {
 		return nil, err
 	}
+	exp := 4 * time.Hour
 	link := &model.Link{
-		URL:    downloadInfo.Url.Url,
-		Header: downloadInfo.Header,
+		Expiration:  &exp,
+		URL:         downloadInfo.Url.Url + fmt.Sprintf("#storageId=%d", d.ID),
+		Header:      downloadInfo.Header,
+		Concurrency: d.Concurrency,
+		PartSize:    d.ChunkSize * utils.KB,
 	}
+	log.Debugf("Link: %v", link)
 	return link, nil
 }
 

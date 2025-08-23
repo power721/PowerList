@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"io"
 	"net/http"
 	"strings"
@@ -29,6 +30,8 @@ type ThunderBrowser struct {
 	Addition
 
 	identity string
+
+	TempDirId string
 }
 
 func (x *ThunderBrowser) Config() driver.Config {
@@ -68,12 +71,15 @@ func (x *ThunderBrowser) Init(ctx context.Context) (err error) {
 				UseVideoUrl:       x.UseVideoUrl,
 				UseFluentPlay:     x.UseFluentPlay,
 				RemoveWay:         x.Addition.RemoveWay,
+				Concurrency:       x.Addition.Concurrency,
+				ID:                x.ID,
 				refreshCTokenCk: func(token string) {
 					x.CaptchaToken = token
 					op.MustSaveDriverStorage(x)
 				},
 			},
 			refreshTokenFunc: func() error {
+				log.Infof("TokenResp: %+v", x.TokenResp)
 				// 通过RefreshToken刷新
 				token, err := x.RefreshToken(x.TokenResp.RefreshToken)
 				if err != nil {
@@ -206,6 +212,8 @@ func (x *ThunderBrowserExpert) Init(ctx context.Context) (err error) {
 				UseVideoUrl:   x.UseVideoUrl,
 				UseFluentPlay: x.UseFluentPlay,
 				RemoveWay:     x.ExpertAddition.RemoveWay,
+				Concurrency:   x.ExpertAddition.Concurrency,
+				ID:            x.ID,
 				refreshCTokenCk: func(token string) {
 					x.CaptchaToken = token
 					op.MustSaveDriverStorage(x)
@@ -363,11 +371,15 @@ func (xc *XunLeiBrowserCommon) Link(ctx context.Context, file model.Obj, args mo
 	if err != nil {
 		return nil, err
 	}
+	exp := 15 * time.Minute
 	link := &model.Link{
-		URL: lFile.WebContentLink,
+		Expiration: &exp,
+		URL:        lFile.WebContentLink + fmt.Sprintf("#storageId=%d", xc.ID),
 		Header: http.Header{
 			"User-Agent": {xc.DownloadUserAgent},
 		},
+		Concurrency: xc.Concurrency,
+		PartSize:    xc.ChunkSize * utils.KB,
 	}
 
 	if xc.UseVideoUrl {
@@ -713,25 +725,20 @@ func (xc *XunLeiBrowserCommon) GetSafeAccessToken(safePassword string) (string, 
 
 // Login 登录
 func (xc *XunLeiBrowserCommon) Login(username, password string) (*TokenResp, error) {
-	//v3 login拿到 sessionID
-	sessionID, err := xc.CoreLogin(username, password)
+	url := XLUSER_API_URL + "/auth/signin"
+	err := xc.RefreshCaptchaTokenInLogin(GetAction(http.MethodPost, url), username)
 	if err != nil {
-		return nil, err
-	}
-	//v1 login拿到令牌
-	url := XLUSER_API_URL + "/auth/signin/token"
-	if err = xc.RefreshCaptchaTokenInLogin(GetAction(http.MethodPost, url), username); err != nil {
 		return nil, err
 	}
 
 	var resp TokenResp
 	_, err = xc.Common.Request(url, http.MethodPost, func(req *resty.Request) {
-		req.SetPathParam("client_id", xc.ClientID)
 		req.SetBody(&SignInRequest{
+			CaptchaToken: xc.GetCaptchaToken(),
 			ClientID:     xc.ClientID,
 			ClientSecret: xc.ClientSecret,
-			Provider:     SignProvider,
-			SigninToken:  sessionID,
+			Username:     username,
+			Password:     password,
 		})
 	}, &resp)
 	if err != nil {

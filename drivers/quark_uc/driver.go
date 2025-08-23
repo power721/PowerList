@@ -23,6 +23,9 @@ type QuarkOrUC struct {
 	Addition
 	config driver.Config
 	conf   Conf
+
+	TempDirId string
+	VIP       bool
 }
 
 func (d *QuarkOrUC) Config() driver.Config {
@@ -44,6 +47,8 @@ func (d *QuarkOrUC) Init(ctx context.Context) error {
 			}
 		}
 	}
+	d.getVipInfo()
+	d.getTempFolder()
 	return err
 }
 
@@ -63,7 +68,7 @@ func (d *QuarkOrUC) List(ctx context.Context, dir model.Obj, args model.ListArgs
 func (d *QuarkOrUC) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	f := file.(*File)
 
-	if d.UseTransCodingAddress && d.config.Name == "Quark" && f.Category == 1 && f.Size > 0 {
+	if (d.UseTransCodingAddress || !d.VIP) && d.config.Name == "Quark" && f.Category == 1 && f.Size > 0 {
 		return d.getTranscodingLink(file)
 	}
 

@@ -3,6 +3,8 @@ package aliyundrive_open
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"net/http"
 	"path/filepath"
 	"time"
@@ -24,6 +26,9 @@ type AliyundriveOpen struct {
 
 	limiter *limiter
 	ref     *AliyundriveOpen
+
+	TempDirId string
+	IsVip     bool
 }
 
 func (d *AliyundriveOpen) Config() driver.Config {
@@ -42,17 +47,40 @@ func (d *AliyundriveOpen) Init(ctx context.Context) error {
 	if d.DriveType == "" {
 		d.DriveType = "default"
 	}
-	res, err := d.request(ctx, limiterOther, "/adrive/v1.0/user/getDriveInfo", http.MethodPost, nil)
+	d.TempDirId = "root"
+
+	err := d.RefreshAliToken(false)
 	if err != nil {
-		d.limiter.free()
-		d.limiter = nil
+		log.Errorf("[%v] RefreshAliToken error: %v", d.AccountId, err)
 		return err
 	}
-	d.DriveId = utils.Json.Get(res, d.DriveType+"_drive_id").ToString()
-	userid := utils.Json.Get(res, "user_id").ToString()
-	d.limiter.free()
-	d.limiter = getLimiterForUser(userid) // Allocate a corresponding limiter for each user.
+
+	d.getVipInfo()
+
+	err = d.refreshToken(false)
+	if err != nil {
+		log.Errorf("[%v] refreshToken error: %v", d.AccountId, err)
+		return err
+	}
+
+	err = d.checkUserId()
+	if err != nil {
+		return err
+	}
+	d.createTempDir(ctx)
 	return nil
+
+	//res, err := d.request(ctx, limiterOther, "/adrive/v1.0/user/getDriveInfo", http.MethodPost, nil)
+	//if err != nil {
+	//	d.limiter.free()
+	//	d.limiter = nil
+	//	return err
+	//}
+	//d.DriveId = utils.Json.Get(res, d.DriveType+"_drive_id").ToString()
+	//userid := utils.Json.Get(res, "user_id").ToString()
+	//d.limiter.free()
+	//d.limiter = getLimiterForUser(userid) // Allocate a corresponding limiter for each user.
+	//return nil
 }
 
 func (d *AliyundriveOpen) InitReference(storage driver.Driver) error {
@@ -119,12 +147,25 @@ func (d *AliyundriveOpen) Link(ctx context.Context, file model.Obj, args model.L
 		}
 		url = utils.Json.Get(res, "streamsUrl", d.LIVPDownloadFormat).ToString()
 	}
-	exp := time.Minute
+	exp := 895 * time.Second
 	return &model.Link{
-		URL:        url,
+		URL:        url + fmt.Sprintf("#storageId=%d", d.ID),
 		Expiration: &exp,
+		Header: http.Header{
+			"Referer":    []string{"https://www.alipan.com/"},
+			"User-Agent": []string{conf.UserAgent},
+		},
+		Concurrency: d.Concurrency,
+		PartSize:    d.ChunkSize * utils.KB,
 	}, nil
 }
+
+//func (d *AliyundriveOpen) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+//	if d.limitLink == nil {
+//		return nil, fmt.Errorf("driver not init")
+//	}
+//	return d.limitLink(ctx, file)
+//}
 
 func (d *AliyundriveOpen) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) (model.Obj, error) {
 	nowTime, _ := getNowTime()

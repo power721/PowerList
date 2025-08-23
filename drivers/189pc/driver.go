@@ -3,6 +3,8 @@ package _189pc
 import (
 	"context"
 	"fmt"
+	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
+	log "github.com/sirupsen/logrus"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,6 +37,9 @@ type Cloud189PC struct {
 
 	storageConfig driver.Config
 	ref           *Cloud189PC
+	TempDirId     string
+	cron          *cron.Cron
+	client2       *resty.Client
 }
 
 func (y *Cloud189PC) Config() driver.Config {
@@ -84,12 +89,29 @@ func (y *Cloud189PC) Init(ctx context.Context) (err error) {
 			})
 		}
 
+		if y.client2 == nil {
+			y.client2 = base.NewRestyClient().SetHeaders(map[string]string{
+				"Accept":  "application/json;charset=UTF-8",
+				"Referer": WEB_URL,
+			})
+			// Disable redirect following
+			y.client2.SetRedirectPolicy(resty.RedirectPolicyFunc(func(req *http.Request, via []*http.Request) error {
+				// Returning an error here prevents following redirects
+				return http.ErrUseLastResponse
+			}))
+		}
+
 		// 避免重复登陆
 		identity := utils.GetMD5EncodeStr(y.Username + y.Password)
 		if !y.isLogin() || y.identity != identity {
 			y.identity = identity
+			err = y.newLogin()
+			if err != nil {
+				log.Warnf("Failed to new login: %v", err)
+			}
 			if err = y.login(); err != nil {
-				return
+				log.Warnf("[%v] login failed: %v", y.ID, err)
+				return nil
 			}
 		}
 	}
@@ -97,24 +119,32 @@ func (y *Cloud189PC) Init(ctx context.Context) (err error) {
 	// 处理家庭云ID
 	if y.FamilyID == "" {
 		if y.FamilyID, err = y.getFamilyID(); err != nil {
-			return err
+			log.Warnf("[%v] getFamilyID failed: %v", y.ID, err)
+			return nil
 		}
 	}
 
 	// 创建中转文件夹
 	if y.FamilyTransfer {
 		if err := y.createFamilyTransferFolder(); err != nil {
-			return err
+			log.Warnf("[%v] createFamilyTransferFolder failed: %v", y.ID, err)
+			return nil
 		}
 	}
 
 	// 清理转存文件节流
 	y.cleanFamilyTransferFile = utils.NewThrottle2(time.Minute, func() {
 		if err := y.cleanFamilyTransfer(context.TODO()); err != nil {
-			utils.Log.Errorf("cleanFamilyTransferFolderError:%s", err)
+			utils.Log.Warnf("cleanFamilyTransferFolderError: %v", err)
 		}
 	})
-	return
+
+	y.Checkin()
+	err = y.createTempDir(ctx)
+	if err != nil {
+		log.Warnf("[%v] createTempDir failed: %v", y.ID, err)
+	}
+	return nil
 }
 
 func (d *Cloud189PC) InitReference(storage driver.Driver) error {
@@ -128,6 +158,9 @@ func (d *Cloud189PC) InitReference(storage driver.Driver) error {
 
 func (y *Cloud189PC) Drop(ctx context.Context) error {
 	y.ref = nil
+	if y.cron != nil {
+		y.cron.Stop()
+	}
 	return nil
 }
 
@@ -176,8 +209,10 @@ func (y *Cloud189PC) Link(ctx context.Context, file model.Obj, args model.LinkAr
 		downloadUrl.URL = res.Header().Get("location")
 	}
 
+	exp := time.Hour
 	like := &model.Link{
-		URL: downloadUrl.URL,
+		Expiration: &exp,
+		URL:        downloadUrl.URL,
 		Header: http.Header{
 			"User-Agent": []string{base.UserAgent},
 		},

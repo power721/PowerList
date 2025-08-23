@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
@@ -62,7 +63,8 @@ func (d *Cloud189) Link(ctx context.Context, file model.Obj, args model.LinkArgs
 	}
 	log.Debugln(res.Status())
 	log.Debugln(res.String())
-	link := model.Link{}
+	exp := time.Hour
+	link := model.Link{Expiration: &exp}
 	log.Debugln("first url:", resp.FileDownloadUrl)
 	if res.StatusCode() == 302 {
 		link.URL = res.Header().Get("location")

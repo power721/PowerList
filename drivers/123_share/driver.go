@@ -3,7 +3,10 @@ package _123Share
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"net/http"
 	"net/url"
 	"sync"
@@ -37,9 +40,10 @@ func (d *Pan123Share) GetAddition() driver.Additional {
 }
 
 func (d *Pan123Share) Init(ctx context.Context) error {
-	// TODO login / refresh token
-	//op.MustSaveDriverStorage(d)
-	return nil
+	if conf.LazyLoad && !conf.StoragesLoaded {
+		return nil
+	}
+	return d.Validate()
 }
 
 func (d *Pan123Share) InitReference(storage driver.Driver) error {
@@ -68,18 +72,47 @@ func (d *Pan123Share) List(ctx context.Context, dir model.Obj, args model.ListAr
 }
 
 func (d *Pan123Share) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	count := op.GetDriverCount("123Pan")
+	var err error
+	for i := 0; i < count; i++ {
+		link, err := d.link(ctx, file, args)
+		if err == nil {
+			return link, nil
+		}
+	}
+	return nil, err
+}
+
+func (d *Pan123Share) link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	storage := op.GetFirstDriver("123Pan", idx)
+	idx++
+	if storage == nil {
+		return nil, errors.New("找不到123云盘帐号")
+	}
+	pan123 := storage.(*_123.Pan123)
+	log.Infof("[%v] 获取123文件直链 %v %v %v", pan123.ID, file.GetName(), file.GetID(), file.GetSize())
 	// TODO return link of file, required
 	if f, ok := file.(File); ok {
+		//var resp DownResp
+		var headers map[string]string
+		if !utils.IsLocalIPAddr(args.IP) {
+			headers = map[string]string{
+				//"X-Real-IP":       "1.1.1.1",
+				"X-Forwarded-For": args.IP,
+			}
+		}
 		data := base.Json{
+			"driveId":   "0",
 			"shareKey":  d.ShareKey,
 			"SharePwd":  d.SharePwd,
 			"etag":      f.Etag,
 			"fileId":    f.FileId,
 			"s3keyFlag": f.S3KeyFlag,
+			"FileName":  f.FileName,
 			"size":      f.Size,
 		}
-		resp, err := d.request(DownloadInfo, http.MethodPost, func(req *resty.Request) {
-			req.SetBody(data)
+		resp, err := pan123.Request(DownloadInfo, http.MethodPost, func(req *resty.Request) {
+			req.SetBody(data).SetHeaders(headers)
 		}, nil)
 		if err != nil {
 			return nil, err
@@ -106,8 +139,10 @@ func (d *Pan123Share) Link(ctx context.Context, file model.Obj, args model.LinkA
 			return nil, err
 		}
 		log.Debug(res.String())
+		exp := 15 * time.Minute
 		link := model.Link{
-			URL: u_,
+			Expiration: &exp,
+			URL:        u_,
 		}
 		log.Debugln("res code: ", res.StatusCode())
 		if res.StatusCode() == 302 {

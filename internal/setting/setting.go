@@ -1,6 +1,7 @@
 package setting
 
 import (
+	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"strconv"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
@@ -27,4 +28,8 @@ func GetInt(key string, defaultVal int) int {
 
 func GetBool(key string) bool {
 	return GetStr(key) == "true" || GetStr(key) == "1"
+}
+
+func SaveSetting(item *model.SettingItem) (err error) {
+	return op.SaveSettingItem(item)
 }
