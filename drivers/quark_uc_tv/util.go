@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"net/http"
 	"strconv"
 	"time"
@@ -216,7 +217,7 @@ func (d *QuarkUCTV) generateReqSign(method string, pathname string, key string) 
 
 func (d *QuarkUCTV) getTranscodingLink(ctx context.Context, file model.Obj) (*model.Link, error) {
 	var fileLink StreamingFileLink
-	_, err := d.request(ctx, "/file", "GET", func(req *resty.Request) {
+	res, err := d.request(ctx, "/file", "GET", func(req *resty.Request) {
 		req.SetQueryParams(map[string]string{
 			"method":     "streaming",
 			"group_by":   "source",
@@ -229,12 +230,28 @@ func (d *QuarkUCTV) getTranscodingLink(ctx context.Context, file model.Obj) (*mo
 		return nil, err
 	}
 
-	return &model.Link{
-		URL:           fileLink.Data.VideoInfo[0].URL,
-		Concurrency:   d.Concurrency,
-		PartSize:      d.ChunkSize * utils.KB,
-		ContentLength: fileLink.Data.VideoInfo[0].Size,
-	}, nil
+	log.Debugf("transcoding link response: %v", string(res))
+	var size int64
+	url := ""
+	for _, info := range fileLink.Data.VideoInfo {
+		if info.URL != "" {
+			if info.Size > size {
+				size = info.Size
+				url = info.URL
+			}
+		}
+	}
+
+	if url != "" {
+		return &model.Link{
+			URL:           url + fmt.Sprintf("#storageId=%d", d.ID),
+			ContentLength: size,
+			Concurrency:   d.Concurrency,
+			PartSize:      d.ChunkSize * utils.KB,
+		}, nil
+	}
+
+	return d.getDownloadLink(ctx, file)
 }
 
 func (d *QuarkUCTV) getDownloadLink(ctx context.Context, file model.Obj) (*model.Link, error) {
