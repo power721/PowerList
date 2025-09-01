@@ -210,7 +210,7 @@ func (y *Cloud189PC) Link(ctx context.Context, file model.Obj, args model.LinkAr
 	}
 
 	exp := time.Hour
-	like := &model.Link{
+	link := &model.Link{
 		Expiration: &exp,
 		URL:        downloadUrl.URL + fmt.Sprintf("#storageId=%d", y.ID),
 		Header: http.Header{
@@ -230,7 +230,7 @@ func (y *Cloud189PC) Link(ctx context.Context, file model.Obj, args model.LinkAr
 			}
 		}
 	*/
-	return like, nil
+	return link, nil
 }
 
 func (y *Cloud189PC) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) (model.Obj, error) {
