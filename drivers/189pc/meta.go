@@ -22,6 +22,9 @@ type Addition struct {
 
 	AutoCheckin bool   `json:"auto_checkin"`
 	Cookie      string `json:"cookie"`
+
+	Concurrency int `json:"concurrency" type:"number" default:"1"`
+	ChunkSize   int `json:"chunk_size" type:"number" default:"1024"`
 }
 
 var config = driver.Config{

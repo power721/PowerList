@@ -216,6 +216,8 @@ func (y *Cloud189PC) Link(ctx context.Context, file model.Obj, args model.LinkAr
 		Header: http.Header{
 			"User-Agent": []string{base.UserAgent},
 		},
+		Concurrency: y.Concurrency,
+		PartSize:    y.ChunkSize * utils.KB,
 	}
 	/*
 		// 获取链接有效时常
