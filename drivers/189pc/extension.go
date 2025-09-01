@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -120,10 +121,12 @@ func (y *Cloud189PC) GetShareLink(shareId int, file model.Obj) (*model.Link, err
 		exp := time.Hour
 		link := &model.Link{
 			Expiration: &exp,
-			URL:        url,
+			URL:        url + fmt.Sprintf("#storageId=%d", y.ID),
 			Header: http.Header{
 				"User-Agent": []string{base.UserAgent},
 			},
+			Concurrency: y.Concurrency,
+			PartSize:    y.ChunkSize * utils.KB,
 		}
 		log.Debugf("使用直链播放：%v", url)
 		return link, nil
