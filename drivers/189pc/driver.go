@@ -212,7 +212,7 @@ func (y *Cloud189PC) Link(ctx context.Context, file model.Obj, args model.LinkAr
 	exp := time.Hour
 	like := &model.Link{
 		Expiration: &exp,
-		URL:        downloadUrl.URL,
+		URL:        downloadUrl.URL + fmt.Sprintf("#storageId=%d", y.ID),
 		Header: http.Header{
 			"User-Agent": []string{base.UserAgent},
 		},
