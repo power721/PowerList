@@ -100,6 +100,7 @@ func (d *Cloud189Share) link(ctx context.Context, file model.Obj) (*model.Link, 
 	}
 
 	fileObject, _ := file.(*FileObj)
+	log.Infof("[%v] 获取天翼云盘转存链接 %v %v", cloud189PC.ID, file.GetName(), file.GetID())
 	link, err = cloud189PC.Transfer(ctx, shareInfo.ShareId, fileObject.ID, fileObject.oldName)
 	return link, err
 }
