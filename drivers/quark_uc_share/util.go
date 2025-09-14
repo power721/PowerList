@@ -135,51 +135,59 @@ func (d *QuarkUCShare) saveFile(quark *quark.QuarkOrUC, id string) (model.Obj, e
 	s := strings.Split(id, "-")
 	fileId := s[0]
 	fileTokenId := s[1]
-	data := base.Json{
-		"fid_list":       []string{fileId},
-		"fid_token_list": []string{fileTokenId},
-		"exclude_fids":   []string{},
-		"to_pdir_fid":    quark.TempDirId,
-		"pwd_id":         d.ShareId,
-		"stoken":         d.ShareToken,
-		"pdir_fid":       "0",
-		"pdir_save_all":  false,
-		"scene":          "link",
-	}
-	query := map[string]string{
-		"pr":           d.conf.pr,
-		"fr":           "pc",
-		"uc_param_str": "",
-		"__dt":         strconv.Itoa(rand.Int()),
-		"__t":          strconv.FormatInt(time.Now().Unix(), 10),
-	}
-	var resp SaveResp
-	res, err := d.request("/share/sharepage/save", http.MethodPost, func(req *resty.Request) {
-		req.SetBody(data).SetQueryParams(query)
-	}, &resp)
-	log.Debugf("saveFile: %v %+v response: %v", id, data, string(res))
-	if err != nil {
-		log.Warnf("save file failed: %v", err)
-		return nil, err
-	}
-	if resp.Status != 200 {
-		return nil, errors.New(resp.Message)
-	}
-	taskId := resp.Data.TaskId
-	log.Debugf("save file task id: %v", taskId)
+	for range 2 {
+		data := base.Json{
+			"fid_list":       []string{fileId},
+			"fid_token_list": []string{fileTokenId},
+			"exclude_fids":   []string{},
+			"to_pdir_fid":    quark.TempDirId,
+			"pwd_id":         d.ShareId,
+			"stoken":         d.ShareToken,
+			"pdir_fid":       "0",
+			"pdir_save_all":  false,
+			"scene":          "link",
+		}
+		query := map[string]string{
+			"pr":           d.conf.pr,
+			"fr":           "pc",
+			"uc_param_str": "",
+			"__dt":         strconv.Itoa(rand.Int()),
+			"__t":          strconv.FormatInt(time.Now().Unix(), 10),
+		}
+		var resp SaveResp
+		res, err := d.request("/share/sharepage/save", http.MethodPost, func(req *resty.Request) {
+			req.SetBody(data).SetQueryParams(query)
+		}, &resp)
+		log.Debugf("saveFile: %v %+v response: %v", id, data, string(res))
+		if err != nil {
+			if strings.Contains(err.Error(), "token校验异常") {
+				d.getShareToken()
+				continue
+			} else {
+				log.Warnf("save file failed: %v", err)
+				return nil, err
+			}
+		}
+		if resp.Status != 200 {
+			return nil, errors.New(resp.Message)
+		}
+		taskId := resp.Data.TaskId
+		log.Debugf("save file task id: %v", taskId)
 
-	newFileId, dirId, err := d.getSaveTaskResult(taskId)
-	if err != nil {
-		return nil, err
+		newFileId, dirId, err := d.getSaveTaskResult(taskId)
+		if err != nil {
+			return nil, err
+		}
+		log.Debugf("new file id: %v dirId: %v", newFileId, dirId)
+		file, err := quark.GetTempFile(dirId, newFileId)
+		if err != nil {
+			log.Warnf("get temp file failed: %v", err)
+			return nil, err
+		}
+		log.Debugf("new file: %+v", file)
+		return file, nil
 	}
-	log.Debugf("new file id: %v dirId: %v", newFileId, dirId)
-	file, err := quark.GetTempFile(dirId, newFileId)
-	if err != nil {
-		log.Warnf("get temp file failed: %v", err)
-		return nil, err
-	}
-	log.Debugf("new file: %+v", file)
-	return file, nil
+	return nil, errors.New("save file failed")
 }
 
 func (d *QuarkUCShare) getSaveTaskResult(taskId string) (string, string, error) {
