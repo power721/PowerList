@@ -88,6 +88,7 @@ type VideoInfo struct {
 type File struct {
 	ID        string `json:"fid"`
 	FID       string `json:"share_fid_token"`
+	PID       string `json:"pdir_fid"`
 	Name      string `json:"file_name"`
 	Type      int    `json:"file_type"`
 	CreatedAt int64  `json:"created_at"`
@@ -98,7 +99,7 @@ type File struct {
 func fileToObj(f File) *model.ObjThumb {
 	return &model.ObjThumb{
 		Object: model.Object{
-			ID:       f.ID + "-" + f.FID,
+			ID:       f.ID + "-" + f.FID + "-" + f.PID,
 			Name:     f.Name,
 			Size:     f.Size,
 			Modified: time.UnixMilli(f.UpdatedAt),
