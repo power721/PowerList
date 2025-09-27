@@ -135,6 +135,7 @@ func (d *QuarkUCShare) saveFile(quark *quark.QuarkOrUC, id string) (model.Obj, e
 	s := strings.Split(id, "-")
 	fileId := s[0]
 	fileTokenId := s[1]
+	pid := s[2]
 	for range 2 {
 		data := base.Json{
 			"fid_list":       []string{fileId},
@@ -158,10 +159,13 @@ func (d *QuarkUCShare) saveFile(quark *quark.QuarkOrUC, id string) (model.Obj, e
 		res, err := d.request("/share/sharepage/save", http.MethodPost, func(req *resty.Request) {
 			req.SetBody(data).SetQueryParams(query)
 		}, &resp)
-		log.Debugf("saveFile: %v %+v response: %v", id, data, string(res))
+		log.Debugf("saveFile: %v %+v response: %v, error: %v", id, data, string(res), err)
 		if err != nil {
 			if strings.Contains(err.Error(), "token校验异常") {
-				d.getShareToken()
+				fileTokenId, err = d.getFileToken(pid, fileId)
+				if err != nil {
+					return nil, err
+				}
 				continue
 			} else {
 				log.Warnf("save file failed: %v", err)
@@ -314,4 +318,17 @@ func (d *QuarkUCShare) getShareFiles(id string) ([]File, error) {
 	}
 
 	return files, nil
+}
+
+func (d *QuarkUCShare) getFileToken(pid, fid string) (string, error) {
+	files, err := d.getShareFiles(pid)
+	if err != nil {
+		return "", err
+	}
+	for _, f := range files {
+		if f.ID == fid {
+			return f.FID, nil
+		}
+	}
+	return "", errors.New("file not found")
 }
