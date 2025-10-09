@@ -172,6 +172,7 @@ func (d *BaiduShare2) List(ctx context.Context, dir model.Obj, args model.ListAr
 			"shorturl":   d.Surl[1:],
 			"page":       fmt.Sprint(page),
 		}
+		log.Debugf("Baidu Share List: %v", page)
 		res, e := d.client.R().
 			SetCookie(&http.Cookie{Name: "BDCLND", Value: d.Token}).
 			SetResult(&respJson).
@@ -194,6 +195,9 @@ func (d *BaiduShare2) List(ctx context.Context, dir model.Obj, args model.ListAr
 						Modified: time.Unix(mtime, 0),
 						IsFolder: v.Isdir.String() == "1",
 					})
+				}
+				if len(respJson.List) >= 100 {
+					more = true
 				}
 			} else {
 				err = fmt.Errorf("%s", res.Body())
