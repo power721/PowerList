@@ -19,7 +19,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/generic_sync"
 	"github.com/OpenListTeam/OpenList/v4/pkg/singleflight"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )

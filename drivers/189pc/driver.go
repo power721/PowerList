@@ -27,8 +27,10 @@ type Cloud189PC struct {
 
 	client *resty.Client
 
-	loginParam *LoginParam
-	tokenInfo  *AppSessionResp
+	loginParam  *LoginParam
+	qrcodeParam *QRLoginParam
+
+	tokenInfo *AppSessionResp
 
 	uploadThread int
 
@@ -114,6 +116,11 @@ func (y *Cloud189PC) Init(ctx context.Context) (err error) {
 				return nil
 			}
 		}
+
+		// 初始化并启动 cron 任务
+		y.cron = cron.NewCron(time.Duration(time.Minute * 5))
+		// 每5分钟执行一次 keepAlive
+		y.cron.Do(y.keepAlive)
 	}
 
 	// 处理家庭云ID
@@ -160,6 +167,7 @@ func (y *Cloud189PC) Drop(ctx context.Context) error {
 	y.ref = nil
 	if y.cron != nil {
 		y.cron.Stop()
+		y.cron = nil
 	}
 	return nil
 }
@@ -328,7 +336,6 @@ func (y *Cloud189PC) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 		FileName: srcObj.GetName(),
 		IsFolder: BoolToNumber(srcObj.IsDir()),
 	})
-
 	if err != nil {
 		return err
 	}
@@ -433,4 +440,25 @@ func (y *Cloud189PC) Put(ctx context.Context, dstDir model.Obj, stream model.Fil
 	default:
 		return y.StreamUpload(ctx, dstDir, stream, up, isFamily, overwrite)
 	}
+}
+
+func (y *Cloud189PC) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	capacityInfo, err := y.getCapacityInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var total, free uint64
+	if y.isFamily() {
+		total = capacityInfo.FamilyCapacityInfo.TotalSize
+		free = capacityInfo.FamilyCapacityInfo.FreeSize
+	} else {
+		total = capacityInfo.CloudCapacityInfo.TotalSize
+		free = capacityInfo.CloudCapacityInfo.FreeSize
+	}
+	return &model.StorageDetails{
+		DiskUsage: model.DiskUsage{
+			TotalSpace: total,
+			FreeSpace:  free,
+		},
+	}, nil
 }

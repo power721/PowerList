@@ -2,6 +2,7 @@ package handles
 
 import (
 	"context"
+	"errors"
 	"github.com/OpenListTeam/OpenList/v4/internal/bootstrap"
 	"strconv"
 	"sync"
