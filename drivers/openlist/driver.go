@@ -35,6 +35,9 @@ func (d *OpenList) GetAddition() driver.Additional {
 
 func (d *OpenList) Init(ctx context.Context) error {
 	d.Addition.Address = strings.TrimSuffix(d.Addition.Address, "/")
+	if d.Addition.Address == "https://alist.xiaoya.pro" {
+		return nil
+	}
 	var resp common.Resp[MeResp]
 	_, _, err := d.request("/me", http.MethodGet, func(req *resty.Request) {
 		req.SetResult(&resp)
