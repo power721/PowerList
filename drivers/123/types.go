@@ -28,7 +28,7 @@ func (f File) CreateTime() time.Time {
 }
 
 func (f File) GetHash() utils.HashInfo {
-	return utils.HashInfo{}
+	return utils.NewHashInfo(utils.MD5, f.Etag)
 }
 
 func (f File) GetPath() string {
@@ -138,5 +138,16 @@ type QrCodeResultResp struct {
 		Token                  string    `json:"token"`
 		LoginStatus            int       `json:"loginStatus"`
 		ScanPlatform           int       `json:"scanPlatform"`
+	} `json:"data"`
+}
+
+type UserInfoResp struct {
+	Data struct {
+		Uid            int64  `json:"UID"`
+		Nickname       string `json:"Nickname"`
+		SpaceUsed      uint64 `json:"SpaceUsed"`
+		SpacePermanent uint64 `json:"SpacePermanent"`
+		SpaceTemp      uint64 `json:"SpaceTemp"`
+		FileCount      int    `json:"FileCount"`
 	} `json:"data"`
 }

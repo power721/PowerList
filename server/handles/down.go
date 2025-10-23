@@ -9,6 +9,7 @@ import (
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
+	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/fs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/net"
@@ -49,13 +50,13 @@ func Down(c *gin.Context) {
 
 func Proxy(c *gin.Context) {
 	rawPath := c.Request.Context().Value(conf.PathKey).(string)
-	//filename := stdpath.Base(rawPath)
+	filename := stdpath.Base(rawPath)
 	storage, err := fs.GetStorage(rawPath, &fs.GetStoragesArgs{})
 	if err != nil {
 		common.ErrorPage(c, err, 500)
 		return
 	}
-	if true {
+	if canProxy(storage, filename) {
 		if _, ok := c.GetQuery("d"); !ok {
 			if url := common.GenerateDownProxyURL(storage.GetStorage(), rawPath); url != "" {
 				c.Redirect(302, url)
@@ -114,9 +115,8 @@ func proxy(c *gin.Context, link *model.Link, file model.Obj, proxyRange bool) {
 		link = common.ProxyRange(c, link, file.GetSize())
 	}
 	Writer := &common.WrittenResponseWriter{ResponseWriter: c.Writer}
-
-	//优先处理md文件
-	if utils.Ext(file.GetName()) == "md" && setting.GetBool(conf.FilterReadMeScripts) {
+	raw, _ := strconv.ParseBool(c.DefaultQuery("raw", "false"))
+	if utils.Ext(file.GetName()) == "md" && setting.GetBool(conf.FilterReadMeScripts) && !raw {
 		buf := bytes.NewBuffer(make([]byte, 0, file.GetSize()))
 		w := &common.InterceptResponseWriter{ResponseWriter: Writer, Writer: buf}
 		err = common.Proxy(w, c.Request, link, file)
@@ -148,7 +148,7 @@ func proxy(c *gin.Context, link *model.Link, file model.Obj, proxyRange bool) {
 	if Writer.IsWritten() {
 		log.Errorf("%s %s local proxy error: %+v", c.Request.Method, c.Request.URL.Path, err)
 	} else {
-		if statusCode, ok := errors.Unwrap(err).(net.ErrorHttpStatusCode); ok {
+		if statusCode, ok := errs.UnwrapOrSelf(err).(net.HttpStatusCodeError); ok {
 			common.ErrorPage(c, err, int(statusCode), true)
 		} else {
 			common.ErrorPage(c, err, 500, true)

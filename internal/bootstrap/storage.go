@@ -45,7 +45,7 @@ func LoadStorages() {
 					i+1, storage.MountPath, storage.Driver)
 			}
 		}
-		conf.StoragesLoaded = true
+		conf.SendStoragesLoadedSignal()
 		log.Infof("=== load storages completed ===")
 		if conf.LazyLoad {
 			syncStatus(2)

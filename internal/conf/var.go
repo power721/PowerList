@@ -3,6 +3,7 @@ package conf
 import (
 	"net/url"
 	"regexp"
+	"sync"
 )
 
 var (
@@ -36,3 +37,39 @@ var (
 	ManageHtml   string
 	IndexHtml    string
 )
+
+var (
+	// StoragesLoaded loaded success if empty
+	StoragesLoaded     = false
+	storagesLoadMu     sync.RWMutex
+	storagesLoadSignal chan struct{} = make(chan struct{})
+)
+
+func StoragesLoadSignal() <-chan struct{} {
+	storagesLoadMu.RLock()
+	ch := storagesLoadSignal
+	storagesLoadMu.RUnlock()
+	return ch
+}
+func SendStoragesLoadedSignal() {
+	storagesLoadMu.Lock()
+	select {
+	case <-storagesLoadSignal:
+		// already closed
+	default:
+		StoragesLoaded = true
+		close(storagesLoadSignal)
+	}
+	storagesLoadMu.Unlock()
+}
+func ResetStoragesLoadSignal() {
+	storagesLoadMu.Lock()
+	select {
+	case <-storagesLoadSignal:
+		StoragesLoaded = false
+		storagesLoadSignal = make(chan struct{})
+	default:
+		// not closed -> nothing to do
+	}
+	storagesLoadMu.Unlock()
+}

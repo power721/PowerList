@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
@@ -16,6 +17,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/generic_sync"
+	"github.com/OpenListTeam/OpenList/v4/pkg/singleflight"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/pkg/errors"
@@ -369,6 +371,8 @@ func UpdateStorage(ctx context.Context, storage model.Storage) error {
 	if oldStorage.MountPath != storage.MountPath {
 		// mount path renamed, need to drop the storage
 		storagesMap.Delete(oldStorage.MountPath)
+		Cache.DeleteDirectoryTree(storageDriver, "/")
+		Cache.InvalidateStorageDetails(storageDriver)
 	}
 	if err != nil {
 		return errors.WithMessage(err, "failed get storage driver")
@@ -389,6 +393,7 @@ func DeleteStorageById(ctx context.Context, id uint) error {
 	if err != nil {
 		return errors.WithMessage(err, "failed get storage")
 	}
+	var dropErr error = nil
 	if !storage.Disabled {
 		storageDriver, err := GetStorageByMountPath(storage.MountPath)
 		if err != nil {
@@ -396,17 +401,19 @@ func DeleteStorageById(ctx context.Context, id uint) error {
 		}
 		// drop the storage in the driver
 		if err := storageDriver.Drop(ctx); err != nil {
-			return errors.Wrapf(err, "failed drop storage")
+			dropErr = errors.Wrapf(err, "failed drop storage")
 		}
 		// delete the storage in the memory
 		storagesMap.Delete(storage.MountPath)
+		Cache.DeleteDirectoryTree(storageDriver, "/")
+		Cache.InvalidateStorageDetails(storageDriver)
 		go callStorageHooks("del", storageDriver)
 	}
 	// delete the storage in the database
 	if err := db.DeleteStorageById(id); err != nil {
 		return errors.WithMessage(err, "failed delete storage in database")
 	}
-	return nil
+	return dropErr
 }
 
 // MustSaveDriverStorage call from specific driver
@@ -465,6 +472,38 @@ func getStoragesByPath(path string) []driver.Driver {
 // for example, there are: /a/b,/a/c,/a/d/e,/a/b.balance1,/av
 // GetStorageVirtualFilesByPath(/a) => b,c,d
 func GetStorageVirtualFilesByPath(prefix string) []model.Obj {
+	return getStorageVirtualFilesByPath(prefix, func(_ driver.Driver, obj model.Obj) model.Obj {
+		return obj
+	})
+}
+
+func GetStorageVirtualFilesWithDetailsByPath(ctx context.Context, prefix string, hideDetails, refresh bool) []model.Obj {
+	if hideDetails {
+		return GetStorageVirtualFilesByPath(prefix)
+	}
+	return getStorageVirtualFilesByPath(prefix, func(d driver.Driver, obj model.Obj) model.Obj {
+		ret := &model.ObjStorageDetails{
+			Obj: obj,
+			StorageDetailsWithName: model.StorageDetailsWithName{
+				StorageDetails: nil,
+				DriverName:     d.Config().Name,
+			},
+		}
+		timeoutCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		details, err := GetStorageDetails(timeoutCtx, d, refresh)
+		if err != nil {
+			if !errors.Is(err, errs.NotImplement) && !errors.Is(err, errs.StorageNotInit) {
+				log.Errorf("failed get %s storage details: %+v", d.GetStorage().MountPath, err)
+			}
+			return ret
+		}
+		ret.StorageDetails = details
+		return ret
+	})
+}
+
+func getStorageVirtualFilesByPath(prefix string, rootCallback func(driver.Driver, model.Obj) model.Obj) []model.Obj {
 	files := make([]model.Obj, 0)
 	storages := storagesMap.Values()
 	sort.Slice(storages, func(i, j int) bool {
@@ -475,23 +514,44 @@ func GetStorageVirtualFilesByPath(prefix string) []model.Obj {
 	})
 
 	prefix = utils.FixAndCleanPath(prefix)
-	set := mapset.NewSet[string]()
+	set := make(map[string]int)
+	var wg sync.WaitGroup
 	for _, v := range storages {
 		mountPath := utils.GetActualMountPath(v.GetStorage().MountPath)
 		// Exclude prefix itself and non prefix
 		if len(prefix) >= len(mountPath) || !utils.IsSubPath(prefix, mountPath) {
 			continue
 		}
-		name := strings.SplitN(strings.TrimPrefix(mountPath[len(prefix):], "/"), "/", 2)[0]
-		if set.Add(name) {
-			files = append(files, &model.Object{
-				Name:     name,
+		names := strings.SplitN(strings.TrimPrefix(mountPath[len(prefix):], "/"), "/", 2)
+		idx, ok := set[names[0]]
+		if !ok {
+			set[names[0]] = len(files)
+			obj := &model.Object{
+				Name:     names[0],
 				Size:     0,
 				Modified: v.GetStorage().Modified,
 				IsFolder: true,
-			})
+			}
+			if len(names) == 1 {
+				idx = len(files)
+				files = append(files, obj)
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					files[idx] = rootCallback(v, files[idx])
+				}()
+			} else {
+				files = append(files, obj)
+			}
+		} else if len(names) == 1 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				files[idx] = rootCallback(v, files[idx])
+			}()
 		}
 	}
+	wg.Wait()
 	return files
 }
 
@@ -514,4 +574,30 @@ func GetBalancedStorage(path string) driver.Driver {
 		balanceMap.Store(virtualPath, i)
 		return storages[i]
 	}
+}
+
+var detailsG singleflight.Group[*model.StorageDetails]
+
+func GetStorageDetails(ctx context.Context, storage driver.Driver, refresh ...bool) (*model.StorageDetails, error) {
+	if storage.Config().CheckStatus && storage.GetStorage().Status != WORK {
+		return nil, errors.WithMessagef(errs.StorageNotInit, "storage status: %s", storage.GetStorage().Status)
+	}
+	wd, ok := storage.(driver.WithDetails)
+	if !ok {
+		return nil, errs.NotImplement
+	}
+	if !utils.IsBool(refresh...) {
+		if ret, ok := Cache.GetStorageDetails(storage); ok {
+			return ret, nil
+		}
+	}
+	details, err, _ := detailsG.Do(storage.GetStorage().MountPath, func() (*model.StorageDetails, error) {
+		ret, err := wd.GetDetails(ctx)
+		if err != nil {
+			return nil, err
+		}
+		Cache.SetStorageDetails(storage, ret)
+		return ret, nil
+	})
+	return details, err
 }
