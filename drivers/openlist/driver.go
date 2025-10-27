@@ -35,6 +35,9 @@ func (d *OpenList) GetAddition() driver.Additional {
 
 func (d *OpenList) Init(ctx context.Context) error {
 	d.Addition.Address = strings.TrimSuffix(d.Addition.Address, "/")
+	if d.Addition.Address == "https://alist.xiaoya.pro" {
+		return nil
+	}
 	var resp common.Resp[MeResp]
 	_, _, err := d.request("/me", http.MethodGet, func(req *resty.Request) {
 		req.SetResult(&resp)
@@ -110,19 +113,29 @@ func (d *OpenList) List(ctx context.Context, dir model.Obj, args model.ListArgs)
 
 func (d *OpenList) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	var resp common.Resp[FsGetResp]
+	headers := map[string]string{
+		"User-Agent": base.UserAgent,
+	}
 	// if PassUAToUpsteam is true, then pass the user-agent to the upstream
-	userAgent := base.UserAgent
 	if d.PassUAToUpsteam {
-		userAgent = args.Header.Get("user-agent")
-		if userAgent == "" {
-			userAgent = base.UserAgent
+		userAgent := args.Header.Get("user-agent")
+		if userAgent != "" {
+			headers["User-Agent"] = base.UserAgent
+		}
+	}
+	// if PassIPToUpsteam is true, then pass the ip address to the upstream
+	if d.PassIPToUpsteam {
+		ip := args.IP
+		if ip != "" {
+			headers["X-Forwarded-For"] = ip
+			headers["X-Real-Ip"] = ip
 		}
 	}
 	_, _, err := d.request("/fs/get", http.MethodPost, func(req *resty.Request) {
 		req.SetResult(&resp).SetBody(FsGetReq{
 			Path:     file.GetPath(),
 			Password: d.MetaPassword,
-		}).SetHeader("user-agent", userAgent)
+		}).SetHeaders(headers)
 	})
 	if err != nil {
 		return nil, err
@@ -355,8 +368,15 @@ func (d *OpenList) ArchiveDecompress(ctx context.Context, srcObj, dstDir model.O
 	return err
 }
 
-//func (d *OpenList) Other(ctx context.Context, args model.OtherArgs) (interface{}, error) {
-//	return nil, errs.NotSupport
-//}
+func (d *OpenList) ResolveLinkCacheMode(_ string) driver.LinkCacheMode {
+	var mode driver.LinkCacheMode
+	if d.PassIPToUpsteam {
+		mode |= driver.LinkCacheIP
+	}
+	if d.PassUAToUpsteam {
+		mode |= driver.LinkCacheUA
+	}
+	return mode
+}
 
 var _ driver.Driver = (*OpenList)(nil)

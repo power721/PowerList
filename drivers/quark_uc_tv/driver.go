@@ -95,14 +95,22 @@ func (d *QuarkUCTV) List(ctx context.Context, dir model.Obj, args model.ListArgs
 	files := make([]model.Obj, 0)
 	pageIndex := int64(0)
 	pageSize := int64(100)
+	desc := "1"
+	orderBy := "3"
+	if d.OrderDirection == "asc" {
+		desc = "0"
+	}
+	if d.OrderBy == "file_name" {
+		orderBy = "1"
+	}
 	for {
 		var filesData FilesData
 		_, err := d.request(ctx, "/file", http.MethodGet, func(req *resty.Request) {
 			req.SetQueryParams(map[string]string{
 				"method":     "list",
 				"parent_fid": dir.GetID(),
-				"order_by":   "3",
-				"desc":       "1",
+				"order_by":   orderBy,
+				"desc":       desc,
 				"category":   "",
 				"source":     "",
 				"ex_source":  "",
@@ -161,7 +169,7 @@ func (d *QuarkUCTV) Put(ctx context.Context, dstDir model.Obj, stream model.File
 }
 
 type QuarkUCTVCommon struct {
-	AccessToken string `json:"access_token"`
+	AccessToken string
 }
 
 var _ driver.Driver = (*QuarkUCTV)(nil)

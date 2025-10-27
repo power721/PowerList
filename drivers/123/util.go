@@ -432,3 +432,14 @@ func generateAuthKey() string {
 	uuidStr := strings.ReplaceAll(uuid.New().String(), "-", "")     // 去掉 UUID 中的所有 -
 	return fmt.Sprintf("%d-%09d-%s", timestamp, randomInt, uuidStr) // 确保随机整数是9位
 }
+
+func (d *Pan123) getUserInfo(ctx context.Context) (*UserInfoResp, error) {
+	var resp UserInfoResp
+	_, err := d.Request(UserInfo, http.MethodGet, func(req *resty.Request) {
+		req.SetContext(ctx)
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}

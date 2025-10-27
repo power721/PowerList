@@ -288,4 +288,15 @@ func (d *Pan123) APIRateLimit(ctx context.Context, api string) error {
 	return limiter.Wait(ctx)
 }
 
+func (d *Pan123) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	userInfo, err := d.getUserInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	total := userInfo.Data.SpacePermanent + userInfo.Data.SpaceTemp
+	return &model.StorageDetails{
+		DiskUsage: driver.DiskUsageFromUsedAndTotal(userInfo.Data.SpaceUsed, total),
+	}, nil
+}
+
 var _ driver.Driver = (*Pan123)(nil)

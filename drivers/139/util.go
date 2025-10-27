@@ -1,11 +1,13 @@
 package _139
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/token"
+	"io"
 	"net/http"
 	"net/url"
 	"path"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
+	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
@@ -107,8 +110,7 @@ func (d *Yun139) refreshToken() error {
 	return nil
 }
 
-func (d *Yun139) request(pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
-	url := "https://yun.139.com" + pathname
+func (d *Yun139) request(url string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
 	req := base.RestyClient.R()
 	randStr := random.String(16)
 	ts := time.Now().Format("2006-01-02 15:04:05")
@@ -219,7 +221,7 @@ func (d *Yun139) requestRoute(data interface{}, resp interface{}) ([]byte, error
 }
 
 func (d *Yun139) post(pathname string, data interface{}, resp interface{}) ([]byte, error) {
-	return d.request(pathname, http.MethodPost, func(req *resty.Request) {
+	return d.request("https://yun.139.com"+pathname, http.MethodPost, func(req *resty.Request) {
 		req.SetBody(data)
 	}, resp)
 }
@@ -268,7 +270,7 @@ func (d *Yun139) getFiles(catalogID string) ([]model.Obj, error) {
 					HashInfo: utils.NewHashInfo(utils.MD5, content.Digest),
 				},
 				Thumbnail: model.Thumbnail{Thumbnail: content.ThumbnailURL},
-				//Thumbnail: content.BigthumbnailURL,
+				// Thumbnail: content.BigthumbnailURL,
 			}
 			files = append(files, &f)
 		}
@@ -335,7 +337,7 @@ func (d *Yun139) familyGetFiles(catalogID string) ([]model.Obj, error) {
 					Path:     path, // 文件所在目录的Path
 				},
 				Thumbnail: model.Thumbnail{Thumbnail: content.ThumbnailURL},
-				//Thumbnail: content.BigthumbnailURL,
+				// Thumbnail: content.BigthumbnailURL,
 			}
 			files = append(files, &f)
 		}
@@ -390,7 +392,7 @@ func (d *Yun139) groupGetFiles(catalogID string) ([]model.Obj, error) {
 					Path:     path, // 文件所在目录的Path
 				},
 				Thumbnail: model.Thumbnail{Thumbnail: content.ThumbnailURL},
-				//Thumbnail: content.BigthumbnailURL,
+				// Thumbnail: content.BigthumbnailURL,
 			}
 			files = append(files, &f)
 		}
@@ -418,6 +420,7 @@ func (d *Yun139) getLink(contentId string) (string, error) {
 	}
 	return jsoniter.Get(res, "data", "downloadURL").ToString(), nil
 }
+
 func (d *Yun139) familyGetLink(contentId string, path string) (string, error) {
 	data := d.newJson(base.Json{
 		"contentID": contentId,
@@ -510,6 +513,7 @@ func (d *Yun139) personalRequest(pathname string, method string, callback base.R
 	}
 	return res.Body(), nil
 }
+
 func (d *Yun139) personalPost(pathname string, data interface{}, resp interface{}) ([]byte, error) {
 	return d.personalRequest(pathname, http.MethodPost, func(req *resty.Request) {
 		req.SetBody(data)
@@ -545,7 +549,7 @@ func (d *Yun139) personalGetFiles(fileId string) ([]model.Obj, error) {
 		}
 		nextPageCursor = resp.Data.NextPageCursor
 		for _, item := range resp.Data.Items {
-			var isFolder = (item.Type == "folder")
+			isFolder := (item.Type == "folder")
 			var f model.Obj
 			if isFolder {
 				f = &model.Object{
@@ -557,7 +561,7 @@ func (d *Yun139) personalGetFiles(fileId string) ([]model.Obj, error) {
 					IsFolder: isFolder,
 				}
 			} else {
-				var Thumbnails = item.Thumbnails
+				Thumbnails := item.Thumbnails
 				var ThumbnailUrl string
 				if d.UseLargeThumbnail {
 					for _, thumb := range Thumbnails {
@@ -600,7 +604,7 @@ func (d *Yun139) personalGetLink(fileId string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var cdnUrl = jsoniter.Get(res, "data", "cdnUrl").ToString()
+	cdnUrl := jsoniter.Get(res, "data", "cdnUrl").ToString()
 	if cdnUrl != "" {
 		return cdnUrl, nil
 	} else {
@@ -614,15 +618,91 @@ func (d *Yun139) getAuthorization() string {
 	}
 	return d.Authorization
 }
+
 func (d *Yun139) getAccount() string {
 	if d.ref != nil {
 		return d.ref.getAccount()
 	}
 	return d.Account
 }
+
 func (d *Yun139) getPersonalCloudHost() string {
 	if d.ref != nil {
 		return d.ref.getPersonalCloudHost()
 	}
 	return d.PersonalCloudHost
+}
+
+func (d *Yun139) uploadPersonalParts(ctx context.Context, partInfos []PartInfo, uploadPartInfos []PersonalPartInfo, rateLimited *driver.RateLimitReader, p *driver.Progress) error {
+	// 确保数组以 PartNumber 从小到大排序
+	sort.Slice(uploadPartInfos, func(i, j int) bool {
+		return uploadPartInfos[i].PartNumber < uploadPartInfos[j].PartNumber
+	})
+
+	for _, uploadPartInfo := range uploadPartInfos {
+		index := uploadPartInfo.PartNumber - 1
+		if index < 0 || index >= len(partInfos) {
+			return fmt.Errorf("invalid PartNumber %d: index out of bounds (partInfos length: %d)", uploadPartInfo.PartNumber, len(partInfos))
+		}
+		partSize := partInfos[index].PartSize
+		log.Debugf("[139] uploading part %+v/%+v", index, len(partInfos))
+		limitReader := io.LimitReader(rateLimited, partSize)
+		r := io.TeeReader(limitReader, p)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, uploadPartInfo.UploadUrl, r)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("Content-Length", fmt.Sprint(partSize))
+		req.Header.Set("Origin", "https://yun.139.com")
+		req.Header.Set("Referer", "https://yun.139.com/")
+		req.ContentLength = partSize
+		err = func() error {
+			res, err := base.HttpClient.Do(req)
+			if err != nil {
+				return err
+			}
+			defer res.Body.Close()
+			log.Debugf("[139] uploaded: %+v", res)
+			if res.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(res.Body)
+				return fmt.Errorf("unexpected status code: %d, body: %s", res.StatusCode, string(body))
+			}
+			return nil
+		}()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *Yun139) getPersonalDiskInfo(ctx context.Context) (*PersonalDiskInfoResp, error) {
+	data := map[string]interface{}{
+		"userDomainId": d.UserDomainID,
+	}
+	var resp PersonalDiskInfoResp
+	_, err := d.request("https://user-njs.yun.139.com/user/disk/getPersonalDiskInfo", http.MethodPost, func(req *resty.Request) {
+		req.SetBody(data)
+		req.SetContext(ctx)
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (d *Yun139) getFamilyDiskInfo(ctx context.Context) (*FamilyDiskInfoResp, error) {
+	data := map[string]interface{}{
+		"userDomainId": d.UserDomainID,
+	}
+	var resp FamilyDiskInfoResp
+	_, err := d.request("https://user-njs.yun.139.com/user/disk/getFamilyDiskInfo", http.MethodPost, func(req *resty.Request) {
+		req.SetBody(data)
+		req.SetContext(ctx)
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
