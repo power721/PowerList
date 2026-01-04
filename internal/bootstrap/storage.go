@@ -161,7 +161,7 @@ func validate115Shares(wg *sync.WaitGroup) {
 			driver.GetStorage().SetStatus(err.Error())
 			op.MustSaveDriverStorage(driver)
 		}
-		time.Sleep(900 * time.Millisecond)
+		time.Sleep(1500 * time.Millisecond)
 	}
 }
 
