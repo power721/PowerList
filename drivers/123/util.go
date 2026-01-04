@@ -82,7 +82,6 @@ type Params struct {
 	XChannel    string
 	XAppVersion string
 }
-
 func signPath(path string, os string, version string) (k string, v string) {
 	table := []byte{'a', 'd', 'e', 'f', 'g', 'h', 'l', 'm', 'y', 'i', 'j', 'n', 'o', 'p', 'k', 'q', 'r', 's', 't', 'u', 'b', 'c', 'v', 'w', 's', 'z'}
 	random := fmt.Sprintf("%.f", math.Round(1e7*rand.Float64()))
