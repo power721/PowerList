@@ -19,8 +19,9 @@ type Addition struct {
 	// 视频文件链接获取方式 download(可获取源视频) or streaming(获取转码后的视频)
 	VideoLinkMethod string `json:"link_method" required:"true" type:"select" options:"download,streaming" default:"download"`
 
-	Concurrency int `json:"concurrency" type:"number" default:"4"`
-	ChunkSize   int `json:"chunk_size" type:"number" default:"256"`
+	Concurrency int    `json:"concurrency" type:"number" default:"4"`
+	ChunkSize   int    `json:"chunk_size" type:"number" default:"256"`
+	Cookie      string `json:"cookie" required:"true"`
 }
 
 type Conf struct {
@@ -30,6 +31,9 @@ type Conf struct {
 	appVer   string
 	channel  string
 	codeApi  string
+	ua       string
+	referer  string
+	pr       string
 }
 
 func init() {
@@ -48,6 +52,9 @@ func init() {
 				appVer:   "1.8.2.2",
 				channel:  "GENERAL",
 				codeApi:  "http://api.extscreen.com/quarkdrive",
+				ua:       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.4-b478491100 Safari/537.36 Channel/pckk_other_ch",
+				referer:  "https://pan.quark.cn",
+				pr:       "ucpro",
 			},
 		}
 	})
@@ -66,6 +73,9 @@ func init() {
 				appVer:   "1.7.2.2",
 				channel:  "UCTVOFFICIALWEB",
 				codeApi:  "http://api.extscreen.com/ucdrive",
+				ua:       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) uc-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.4-b478491100 Safari/537.36 Channel/pckk_other_ch",
+				referer:  "https://drive.uc.cn",
+				pr:       "UCBrowser",
 			},
 		}
 	})
