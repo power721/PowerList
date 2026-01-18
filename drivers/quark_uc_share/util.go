@@ -24,6 +24,7 @@ import (
 
 var Cookie = ""
 var idx = 0
+var idx2 = 0
 
 func (d *QuarkUCShare) getDriverName() string {
 	name := "Quark"

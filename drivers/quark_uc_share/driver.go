@@ -96,21 +96,24 @@ func (d *QuarkUCShare) link(ctx context.Context, file model.Obj, args model.Link
 		} else {
 			tvName = "QuarkTV"
 		}
-		storage := op.GetFirstDriver(tvName, idx)
+		storage := op.GetFirstDriver(tvName, idx2)
+		idx2++
 		if storage != nil {
 			uc := storage.(*quark_uc_tv.QuarkUCTV)
-			Cookie = uc.Cookie
-			log.Infof("[%v] 获取%s文件直链 %v %v %v", uc.ID, tvName, file.GetName(), file.GetID(), file.GetSize())
-			newFile, err := d.saveTvFile(ctx, uc, file.GetID())
-			if err != nil {
-				return nil, err
-			}
+			if uc.Cookie != "" {
+				Cookie = uc.Cookie
+				log.Infof("[%v] 获取%s文件直链 %v %v %v", uc.ID, tvName, file.GetName(), file.GetID(), file.GetSize())
+				newFile, err := d.saveTvFile(ctx, uc, file.GetID())
+				if err != nil {
+					return nil, err
+				}
 
-			link, err := d.getTvDownloadUrl(ctx, uc, newFile, args)
-			if link != nil {
-				link.URL = link.URL + "#proxy=0"
+				link, err := d.getTvDownloadUrl(ctx, uc, newFile, args)
+				if link != nil && uc.VideoLinkMethod == "streaming" {
+					link.URL = link.URL + "#proxy=0"
+				}
+				return link, err
 			}
-			return link, err
 		}
 	}
 
