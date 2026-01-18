@@ -106,6 +106,7 @@ const (
 	AliAccountId     = "ali_account_id"
 	TempDirName      = "alist-tvbox-temp"
 	DriverRoundRobin = "driver_round_robin"
+	UssQuarkTv       = "use_quark_tv"
 
 	// SSO
 	SSOClientId          = "sso_client_id"

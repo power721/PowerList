@@ -243,6 +243,7 @@ func InitialSettings() []model.SettingItem {
 		{Key: conf.ExternalPort, Value: "5344", Type: conf.TypeNumber, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: conf.AliTo115, Value: "false", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: conf.DriverRoundRobin, Value: "false", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
+		{Key: conf.UssQuarkTv, Value: "true", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: "ali_lazy_load", Value: "true", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: "open_token_url", Value: "https://api.xhofe.top/alist/ali_open/token", Type: conf.TypeString, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: "open_api_client_id", Value: "", Type: conf.TypeString, Group: model.SINGLE, Flag: model.PRIVATE},

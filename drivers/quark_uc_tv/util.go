@@ -7,10 +7,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"net/http"
 	"strconv"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 
@@ -31,6 +32,10 @@ const (
 	DeviceGpu    = "Adreno (TM) 550"
 	ActivityRect = "{}"
 )
+
+func (d *QuarkUCTV) Request(ctx context.Context, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
+	return d.request(ctx, pathname, method, callback, resp)
+}
 
 func (d *QuarkUCTV) request(ctx context.Context, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
 	u := d.conf.api + pathname
@@ -243,6 +248,7 @@ func (d *QuarkUCTV) getTranscodingLink(ctx context.Context, file model.Obj) (*mo
 	}
 
 	if url != "" {
+		log.Debugf("transcoding link url: %v", url)
 		return &model.Link{
 			URL:           url + fmt.Sprintf("#storageId=%d", d.ID),
 			ContentLength: size,
@@ -269,6 +275,7 @@ func (d *QuarkUCTV) getDownloadLink(ctx context.Context, file model.Obj) (*model
 		return nil, err
 	}
 
+	log.Debugf("download link: %v", fileLink)
 	return &model.Link{
 		URL:         fileLink.Data.DownloadURL + fmt.Sprintf("#storageId=%d", d.ID),
 		Concurrency: d.Concurrency,

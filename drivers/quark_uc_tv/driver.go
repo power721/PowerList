@@ -22,6 +22,8 @@ type QuarkUCTV struct {
 	Addition
 	config driver.Config
 	conf   Conf
+
+	TempDirId string
 }
 
 func (d *QuarkUCTV) Config() driver.Config {
@@ -84,6 +86,7 @@ func (d *QuarkUCTV) Init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	d.getTempFolder(ctx)
 	return nil
 }
 

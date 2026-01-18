@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	quark "github.com/OpenListTeam/OpenList/v4/drivers/quark_uc"
+	"github.com/OpenListTeam/OpenList/v4/drivers/quark_uc_tv"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	log "github.com/sirupsen/logrus"
@@ -86,6 +89,31 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 }
 
 func (d *QuarkUCShare) link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	if setting.GetBool(conf.UssQuarkTv) {
+		var tvName string
+		if d.config.Name == "UCShare" {
+			tvName = "UCTV"
+		} else {
+			tvName = "QuarkTV"
+		}
+		storage := op.GetFirstDriver(tvName, idx)
+		if storage != nil {
+			uc := storage.(*quark_uc_tv.QuarkUCTV)
+			Cookie = uc.Cookie
+			log.Infof("[%v] 获取%s文件直链 %v %v %v", uc.ID, tvName, file.GetName(), file.GetID(), file.GetSize())
+			newFile, err := d.saveTvFile(ctx, uc, file.GetID())
+			if err != nil {
+				return nil, err
+			}
+
+			link, err := d.getTvDownloadUrl(ctx, uc, newFile, args)
+			if link != nil {
+				link.URL = link.URL + "#proxy=0"
+			}
+			return link, err
+		}
+	}
+
 	name := d.getDriverName()
 	storage := op.GetFirstDriver(name, idx)
 	idx++

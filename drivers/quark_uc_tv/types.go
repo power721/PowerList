@@ -13,6 +13,14 @@ type Resp struct {
 	ErrorInfo string `json:"error_info"`
 }
 
+type Resp2 struct {
+	Status  int    `json:"status"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	//ReqId     string `json:"req_id"`
+	//Timestamp int    `json:"timestamp"`
+}
+
 type CommonRsp struct {
 	Status int    `json:"status"`
 	ReqID  string `json:"req_id"`
