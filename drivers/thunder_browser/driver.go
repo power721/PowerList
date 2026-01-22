@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
@@ -726,25 +726,20 @@ func (xc *XunLeiBrowserCommon) GetSafeAccessToken(safePassword string) (string, 
 
 // Login 登录
 func (xc *XunLeiBrowserCommon) Login(username, password string) (*TokenResp, error) {
-	//v3 login拿到 sessionID
-	sessionID, err := xc.CoreLogin(username, password)
+	url := XLUSER_API_URL + "/auth/signin"
+	err := xc.RefreshCaptchaTokenInLogin(GetAction(http.MethodPost, url), username)
 	if err != nil {
-		return nil, err
-	}
-	//v1 login拿到令牌
-	url := XLUSER_API_URL + "/auth/signin/token"
-	if err = xc.RefreshCaptchaTokenInLogin(GetAction(http.MethodPost, url), username); err != nil {
 		return nil, err
 	}
 
 	var resp TokenResp
 	_, err = xc.Common.Request(url, http.MethodPost, func(req *resty.Request) {
-		req.SetPathParam("client_id", xc.ClientID)
 		req.SetBody(&SignInRequest{
+			CaptchaToken: xc.GetCaptchaToken(),
 			ClientID:     xc.ClientID,
 			ClientSecret: xc.ClientSecret,
-			Provider:     SignProvider,
-			SigninToken:  sessionID,
+			Username:     username,
+			Password:     password,
 		})
 	}, &resp)
 	if err != nil {
@@ -853,7 +848,7 @@ func (xc *XunLeiBrowserCommon) OfflineList(ctx context.Context, nextPageToken st
 func (xc *XunLeiBrowserCommon) DeleteOfflineTasks(ctx context.Context, taskIDs []string) error {
 	queryParams := map[string]string{
 		"task_ids": strings.Join(taskIDs, ","),
-		"_t":       strconv.FormatInt(time.Now().UnixMilli(), 10),
+		"_t":       fmt.Sprintf("%d", time.Now().UnixMilli()),
 	}
 	if xc.UseFluentPlay {
 		queryParams["space"] = ThunderBrowserDriveFluentPlayFolderType
