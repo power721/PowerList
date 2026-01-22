@@ -1,8 +1,11 @@
 package quark_uc_share
 
 import (
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	log "github.com/sirupsen/logrus"
 )
 
 type Addition struct {
@@ -20,6 +23,8 @@ type Conf struct {
 	api     string
 	pr      string
 }
+
+const baseId = 20000
 
 func init() {
 	op.RegisterDriver(func() driver.Driver {
@@ -52,4 +57,48 @@ func init() {
 			},
 		}
 	})
+	op.RegisterValidateFunc(func() error {
+		return validateQuarkShares()
+	})
+	op.RegisterValidateFunc(func() error {
+		return validateUcShares()
+	})
+}
+
+func validateQuarkShares() error {
+	storages := op.GetStorages("QuarkShare")
+	log.Infof("validate %v Quark shares", len(storages))
+	for _, storage := range storages {
+		driver := storage.(*QuarkUCShare)
+		if driver.ID < baseId {
+			continue
+		}
+		err := driver.Validate()
+		if err != nil {
+			log.Warnf("[%v] 夸克分享错误: %v", driver.ID, err)
+			driver.GetStorage().SetStatus(err.Error())
+			op.MustSaveDriverStorage(driver)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil
+}
+
+func validateUcShares() error {
+	storages := op.GetStorages("UCShare")
+	log.Infof("validate %v UC shares", len(storages))
+	for _, storage := range storages {
+		driver := storage.(*QuarkUCShare)
+		if driver.ID < baseId {
+			continue
+		}
+		err := driver.Validate()
+		if err != nil {
+			log.Warnf("[%v] UC分享错误: %v", driver.ID, err)
+			driver.GetStorage().SetStatus(err.Error())
+			op.MustSaveDriverStorage(driver)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil
 }

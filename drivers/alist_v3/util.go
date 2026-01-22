@@ -46,7 +46,7 @@ func (d *AListV3) request(api, method string, callback base.ReqCallback, retry .
 		}
 		return nil, code, err
 	}
-	log.Debugf("[alist_v3] response body: %s", res.String())
+	log.Debugf("[openlist] response body: %s", res.String())
 	if res.StatusCode() >= 400 {
 		return nil, res.StatusCode(), fmt.Errorf("request failed, status: %s", res.Status())
 	}

@@ -190,9 +190,7 @@ func (d *ProtonDrive) Link(ctx context.Context, file model.Obj, args model.LinkA
 
 	expiration := time.Minute
 	return &model.Link{
-		RangeReader: &model.FileRangeReader{
-			RangeReaderIF: stream.RateLimitRangeReaderFunc(rangeReaderFunc),
-		},
+		RangeReader:   stream.RateLimitRangeReaderFunc(rangeReaderFunc),
 		ContentLength: size,
 		Expiration:    &expiration,
 	}, nil
@@ -277,12 +275,10 @@ func (d *ProtonDrive) GetDetails(ctx context.Context) (*model.StorageDetails, er
 	if err != nil {
 		return nil, err
 	}
-	total := uint64(about.MaxSpace)
-	free := total - uint64(about.UsedSpace)
 	return &model.StorageDetails{
 		DiskUsage: model.DiskUsage{
-			TotalSpace: total,
-			FreeSpace:  free,
+			TotalSpace: about.MaxSpace,
+			UsedSpace:  about.UsedSpace,
 		},
 	}, nil
 }

@@ -173,5 +173,5 @@ func canProxy(storage driver.Driver, filename string) bool {
 	if utils.SliceContains(conf.SlicesMap[conf.TextTypes], utils.Ext(filename)) {
 		return true
 	}
-	return true
+	return false
 }

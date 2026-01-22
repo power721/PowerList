@@ -15,6 +15,7 @@ type ListArgs struct {
 	S3ShowPlaceholder  bool
 	Refresh            bool
 	WithStorageDetails bool
+	SkipHook           bool
 }
 
 type LinkArgs struct {
@@ -34,7 +35,7 @@ type Link struct {
 	//for accelerating request, use multi-thread downloading
 	Concurrency   int   `json:"concurrency"`
 	PartSize      int   `json:"part_size"`
-	ContentLength int64 `json:"-"` // 转码视频、缩略图
+	ContentLength int64 `json:"content_length"` // 转码视频、缩略图
 
 	utils.SyncClosers `json:"-"`
 	// 如果SyncClosers中的资源被关闭后Link将不可用，则此值应为 true
@@ -77,6 +78,7 @@ type ArchiveDecompressArgs struct {
 	ArchiveInnerArgs
 	CacheFull     bool
 	PutIntoNewDir bool
+	Overwrite     bool
 }
 
 type SharingListArgs struct {

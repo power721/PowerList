@@ -33,28 +33,27 @@ type DirReq struct {
 }
 
 type ObjResp struct {
-	Id           string                        `json:"id"`
-	Path         string                        `json:"path"`
-	Name         string                        `json:"name"`
-	Size         int64                         `json:"size"`
-	IsDir        bool                          `json:"is_dir"`
-	Modified     time.Time                     `json:"modified"`
-	Created      time.Time                     `json:"created"`
-	Sign         string                        `json:"sign"`
-	Thumb        string                        `json:"thumb"`
-	Type         int                           `json:"type"`
-	HashInfoStr  string                        `json:"hashinfo"`
-	HashInfo     map[*utils.HashType]string    `json:"hash_info"`
-	MountDetails *model.StorageDetailsWithName `json:"mount_details,omitempty"`
+	Name         string                     `json:"name"`
+	Size         int64                      `json:"size"`
+	IsDir        bool                       `json:"is_dir"`
+	Modified     time.Time                  `json:"modified"`
+	Created      time.Time                  `json:"created"`
+	Sign         string                     `json:"sign"`
+	Thumb        string                     `json:"thumb"`
+	Type         int                        `json:"type"`
+	HashInfoStr  string                     `json:"hashinfo"`
+	HashInfo     map[*utils.HashType]string `json:"hash_info"`
+	MountDetails *model.StorageDetails      `json:"mount_details,omitempty"`
 }
 
 type FsListResp struct {
-	Content  []ObjResp `json:"content"`
-	Total    int64     `json:"total"`
-	Readme   string    `json:"readme"`
-	Header   string    `json:"header"`
-	Write    bool      `json:"write"`
-	Provider string    `json:"provider"`
+	Content           []ObjResp `json:"content"`
+	Total             int64     `json:"total"`
+	Readme            string    `json:"readme"`
+	Header            string    `json:"header"`
+	Write             bool      `json:"write"`
+	Provider          string    `json:"provider"`
+	DirectUploadTools []string  `json:"direct_upload_tools,omitempty"`
 }
 
 func FsListSplit(c *gin.Context) {
@@ -109,17 +108,20 @@ func FsList(c *gin.Context, req *ListReq, user *model.User) {
 	}
 	total, objs := pagination(objs, &req.PageReq)
 	provider := "unknown"
-	storage, err := fs.GetStorage(reqPath, &fs.GetStoragesArgs{})
-	if err == nil {
-		provider = storage.GetStorage().Driver
+	var directUploadTools []string
+	if user.CanWrite() {
+		if storage, err := fs.GetStorage(reqPath, &fs.GetStoragesArgs{}); err == nil {
+			directUploadTools = op.GetDirectUploadTools(storage)
+		}
 	}
 	common.SuccessResp(c, FsListResp{
-		Content:  toObjsResp(objs, reqPath, isEncrypt(meta, reqPath)),
-		Total:    int64(total),
-		Readme:   getReadme(meta, reqPath),
-		Header:   getHeader(meta, reqPath),
-		Write:    user.CanWrite() || common.CanWrite(meta, reqPath),
-		Provider: provider,
+		Content:           toObjsResp(objs, reqPath, isEncrypt(meta, reqPath)),
+		Total:             int64(total),
+		Readme:            getReadme(meta, reqPath),
+		Header:            getHeader(meta, reqPath),
+		Write:             user.CanWrite() || common.CanWrite(meta, reqPath),
+		Provider:          provider,
+		DirectUploadTools: directUploadTools,
 	})
 }
 
@@ -230,8 +232,6 @@ func toObjsResp(objs []model.Obj, parent string, encrypt bool) []ObjResp {
 		thumb, _ := model.GetThumb(obj)
 		mountDetails, _ := model.GetStorageDetails(obj)
 		resp = append(resp, ObjResp{
-			Id:           obj.GetID(),
-			Path:         obj.GetPath(),
 			Name:         obj.GetName(),
 			Size:         obj.GetSize(),
 			IsDir:        obj.IsDir(),
@@ -361,8 +361,6 @@ func FsGet(c *gin.Context, req *FsGetReq, user *model.User) {
 	mountDetails, _ := model.GetStorageDetails(obj)
 	common.SuccessResp(c, FsGetResp{
 		ObjResp: ObjResp{
-			Id:           obj.GetID(),
-			Path:         obj.GetPath(),
 			Name:         obj.GetName(),
 			Size:         obj.GetSize(),
 			IsDir:        obj.IsDir(),

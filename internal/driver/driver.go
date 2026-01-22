@@ -110,15 +110,6 @@ type PutURL interface {
 	PutURL(ctx context.Context, dstDir model.Obj, name, url string) error
 }
 
-//type WriteResult interface {
-//	MkdirResult
-//	MoveResult
-//	RenameResult
-//	CopyResult
-//	PutResult
-//	Remove
-//}
-
 type MkdirResult interface {
 	MakeDir(ctx context.Context, parentDir model.Obj, dirName string) (model.Obj, error)
 }
@@ -217,4 +208,13 @@ type Reference interface {
 type LinkCacheModeResolver interface {
 	// ResolveLinkCacheMode returns the LinkCacheMode for the given path.
 	ResolveLinkCacheMode(path string) LinkCacheMode
+}
+
+type DirectUploader interface {
+	// GetDirectUploadTools returns available frontend-direct upload tools
+	GetDirectUploadTools() []string
+	// GetDirectUploadInfo returns the information needed for direct upload from client to storage
+	// actualPath is the path relative to the storage root (after removing mount path prefix)
+	// return errs.NotImplement if the driver does not support the given direct upload tool
+	GetDirectUploadInfo(ctx context.Context, tool string, dstDir model.Obj, fileName string, fileSize int64) (any, error)
 }

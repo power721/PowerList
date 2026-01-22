@@ -98,7 +98,9 @@ func (d *Onedrive) List(ctx context.Context, dir model.Obj, args model.ListArgs)
 		return nil, err
 	}
 	return utils.SliceConvert(files, func(src File) (model.Obj, error) {
-		return fileToObj(src, dir.GetID()), nil
+		obj := fileToObj(src, dir.GetID())
+		obj.Path = path.Join(dir.GetPath(), obj.GetName())
+		return obj, nil
 	})
 }
 
@@ -231,9 +233,24 @@ func (d *Onedrive) GetDetails(ctx context.Context) (*model.StorageDetails, error
 	return &model.StorageDetails{
 		DiskUsage: model.DiskUsage{
 			TotalSpace: drive.Quota.Total,
-			FreeSpace:  drive.Quota.Remaining,
+			UsedSpace:  drive.Quota.Used,
 		},
 	}, nil
+}
+
+func (d *Onedrive) GetDirectUploadTools() []string {
+	if !d.EnableDirectUpload {
+		return nil
+	}
+	return []string{"HttpDirect"}
+}
+
+// GetDirectUploadInfo returns the direct upload info for OneDrive
+func (d *Onedrive) GetDirectUploadInfo(ctx context.Context, _ string, dstDir model.Obj, fileName string, _ int64) (any, error) {
+	if !d.EnableDirectUpload {
+		return nil, errs.NotImplement
+	}
+	return d.getDirectUploadInfo(ctx, path.Join(dstDir.GetPath(), fileName))
 }
 
 var _ driver.Driver = (*Onedrive)(nil)

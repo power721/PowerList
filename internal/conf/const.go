@@ -40,6 +40,7 @@ const (
 	SharePreviewArchivesByDefault = "share_preview_archives_by_default"
 	ReadMeAutoRender              = "readme_autorender"
 	FilterReadMeScripts           = "filter_readme_scripts"
+	NonEFSZipEncoding             = "non_efs_zip_encoding"
 
 	// global
 	HideFiles               = "hide_files"
@@ -57,6 +58,9 @@ const (
 	ShareArchivePreview     = "share_archive_preview"
 	ShareForceProxy         = "share_force_proxy"
 	ShareSummaryContent     = "share_summary_content"
+	HandleHookAfterWriting  = "handle_hook_after_writing"
+	HandleHookRateLimit     = "handle_hook_rate_limit"
+	IgnoreSystemFiles       = "ignore_system_files"
 
 	// index
 	SearchIndex     = "search_index"
@@ -74,6 +78,9 @@ const (
 
 	// 115
 	Pan115TempDir = "115_temp_dir"
+
+	// 123
+	Pan123TempDir = "123_temp_dir"
 
 	// 115_open
 	Pan115OpenTempDir = "115_open_temp_dir"
@@ -127,6 +134,7 @@ const (
 	// ldap
 	LdapLoginEnabled      = "ldap_login_enabled"
 	LdapServer            = "ldap_server"
+	LdapSkipTlsVerify     = "ldap_skip_tls_verify"
 	LdapManagerDN         = "ldap_manager_dn"
 	LdapManagerPassword   = "ldap_manager_password"
 	LdapUserSearchBase    = "ldap_user_search_base"
@@ -182,7 +190,7 @@ const (
 )
 
 // ContextKey is the type of context keys.
-type ContextKey int
+type ContextKey int8
 
 const (
 	_ ContextKey = iota
@@ -198,4 +206,5 @@ const (
 	UserAgentKey
 	PathKey
 	SharingIDKey
+	SkipHookKey
 )

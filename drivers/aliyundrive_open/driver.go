@@ -105,7 +105,6 @@ func (d *AliyundriveOpen) GetRoot(ctx context.Context) (model.Obj, error) {
 		ID:       d.RootFolderID,
 		Path:     "/",
 		Name:     "root",
-		Size:     0,
 		Modified: d.Modified,
 		IsFolder: true,
 	}, nil
@@ -159,13 +158,6 @@ func (d *AliyundriveOpen) Link(ctx context.Context, file model.Obj, args model.L
 		PartSize:    d.ChunkSize * utils.KB,
 	}, nil
 }
-
-//func (d *AliyundriveOpen) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
-//	if d.limitLink == nil {
-//		return nil, fmt.Errorf("driver not init")
-//	}
-//	return d.limitLink(ctx, file)
-//}
 
 func (d *AliyundriveOpen) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) (model.Obj, error) {
 	nowTime, _ := getNowTime()
@@ -330,6 +322,21 @@ func (d *AliyundriveOpen) Other(ctx context.Context, args model.OtherArgs) (inte
 		return nil, err
 	}
 	return resp, nil
+}
+
+func (d *AliyundriveOpen) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	res, err := d.request(ctx, limiterOther, "/adrive/v1.0/user/getSpaceInfo", http.MethodPost, nil)
+	if err != nil {
+		return nil, err
+	}
+	total := utils.Json.Get(res, "personal_space_info", "total_size").ToInt64()
+	used := utils.Json.Get(res, "personal_space_info", "used_size").ToInt64()
+	return &model.StorageDetails{
+		DiskUsage: model.DiskUsage{
+			TotalSpace: total,
+			UsedSpace:  used,
+		},
+	}, nil
 }
 
 var _ driver.Driver = (*AliyundriveOpen)(nil)

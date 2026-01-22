@@ -33,3 +33,11 @@ func GetBool(key string) bool {
 func SaveSetting(item *model.SettingItem) (err error) {
 	return op.SaveSettingItem(item)
 }
+
+func GetFloat(key string, defaultVal float64) float64 {
+	f, err := strconv.ParseFloat(GetStr(key), 64)
+	if err != nil {
+		return defaultVal
+	}
+	return f
+}
