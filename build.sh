@@ -199,20 +199,6 @@ BuildDockerMultiplatform() {
     echo "building for $os_arch"
     go build -o build/$os/$arch/"$appName" -ldflags="$docker_lflags" -tags=jsoniter .
   done
-
-#  DOCKER_ARM_ARCHES=(linux-arm/v6 linux-arm/v7)
-#  CGO_ARGS=(armv6-linux-musleabihf-gcc armv7l-linux-musleabihf-gcc)
-#  GO_ARM=(6 7)
-#  export GOOS=linux
-#  export GOARCH=arm
-#  for i in "${!DOCKER_ARM_ARCHES[@]}"; do
-#    docker_arch=${DOCKER_ARM_ARCHES[$i]}
-#    cgo_cc=${CGO_ARGS[$i]}
-#    export GOARM=${GO_ARM[$i]}
-#    export CC=${cgo_cc}
-#    echo "building for $docker_arch"
-#    go build -o build/${docker_arch%%-*}/${docker_arch##*-}/"$appName" -ldflags="$docker_lflags" -tags=jsoniter .
-#  done
 }
 
 BuildRelease() {

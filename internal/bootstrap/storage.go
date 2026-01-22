@@ -19,6 +19,7 @@ func LoadStorages() {
 	if err != nil {
 		utils.Log.Fatalf("failed get enabled storages: %+v", err)
 	}
+
 	log.Infof("total %v enabled storages", len(storages))
 	conf.LazyLoad = setting.GetBool("ali_lazy_load")
 
@@ -35,6 +36,7 @@ func LoadStorages() {
 			}
 		}
 		conf.SendStoragesLoadedSignal()
+
 		log.Infof("=== load storages completed ===")
 		if conf.LazyLoad {
 			syncStatus(2)

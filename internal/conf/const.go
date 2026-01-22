@@ -9,8 +9,6 @@ const (
 )
 
 const (
-	UA115Browser = "Mozilla/5.0 115Browser/27.0.3.7"
-	UserAgent    = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
 	// site
 	VERSION      = "version"
 	SiteTitle    = "site_title"
@@ -98,8 +96,12 @@ const (
 	ThunderBrowserTempDir = "thunder_browser_temp_dir"
 
 	// single
-	Token            = "token"
-	IndexProgress    = "index_progress"
+	Token         = "token"
+	IndexProgress = "index_progress"
+
+	// AT
+	UA115Browser     = "Mozilla/5.0 115Browser/27.0.3.7"
+	UserAgent        = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36"
 	DeleteDelayTime  = "delete_delay_time"
 	ExternalPort     = "external_port"
 	QUARK            = "QUARK"

@@ -90,30 +90,6 @@ func ListStorages(c *gin.Context) {
 	})
 }
 
-func GetFailedStorages(c *gin.Context) {
-	var req model.PageReq
-	if err := c.ShouldBind(&req); err != nil {
-		common.ErrorResp(c, err, 400)
-		return
-	}
-	req.Validate()
-	log.Debugf("%+v", req)
-	storages, total, err := db.GetFailedStorages(req.Page, req.PerPage)
-	if err != nil {
-		common.ErrorResp(c, err, 500)
-		return
-	}
-	common.SuccessResp(c, common.PageResp{
-		Content: storages,
-		Total:   total,
-	})
-}
-
-func ValidateStorages(c *gin.Context) {
-	go op.ValidateStorages()
-	common.SuccessResp(c)
-}
-
 func CreateStorage(c *gin.Context) {
 	var req model.Storage
 	if err := c.ShouldBind(&req); err != nil {
@@ -186,20 +162,6 @@ func EnableStorage(c *gin.Context) {
 	common.SuccessResp(c)
 }
 
-func ReloadStorage(c *gin.Context) {
-	idStr := c.Query("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		common.ErrorResp(c, err, 400)
-		return
-	}
-	if err := op.ReloadStorage(c, uint(id)); err != nil {
-		common.ErrorResp(c, err, 500, true)
-		return
-	}
-	common.SuccessResp(c)
-}
-
 func GetStorage(c *gin.Context) {
 	idStr := c.Query("id")
 	id, err := strconv.Atoi(idStr)
@@ -244,5 +206,45 @@ func LoadAllStorages(c *gin.Context) {
 		}
 		conf.SendStoragesLoadedSignal()
 	}(storages)
+	common.SuccessResp(c)
+}
+
+// AT
+
+func GetFailedStorages(c *gin.Context) {
+	var req model.PageReq
+	if err := c.ShouldBind(&req); err != nil {
+		common.ErrorResp(c, err, 400)
+		return
+	}
+	req.Validate()
+	log.Debugf("%+v", req)
+	storages, total, err := db.GetFailedStorages(req.Page, req.PerPage)
+	if err != nil {
+		common.ErrorResp(c, err, 500)
+		return
+	}
+	common.SuccessResp(c, common.PageResp{
+		Content: storages,
+		Total:   total,
+	})
+}
+
+func ValidateStorages(c *gin.Context) {
+	go op.ValidateStorages()
+	common.SuccessResp(c)
+}
+
+func ReloadStorage(c *gin.Context) {
+	idStr := c.Query("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		common.ErrorResp(c, err, 400)
+		return
+	}
+	if err := op.ReloadStorage(c, uint(id)); err != nil {
+		common.ErrorResp(c, err, 500, true)
+		return
+	}
 	common.SuccessResp(c)
 }

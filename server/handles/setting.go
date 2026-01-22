@@ -61,20 +61,6 @@ func SaveSettings(c *gin.Context) {
 	}
 }
 
-func SaveSetting(c *gin.Context) {
-	var req model.SettingItem
-	if err := c.ShouldBind(&req); err != nil {
-		common.ErrorResp(c, err, 400)
-		return
-	}
-	if err := op.SaveSettingItem(&req); err != nil {
-		common.ErrorResp(c, err, 500)
-	} else {
-		common.SuccessResp(c)
-		static.UpdateIndex()
-	}
-}
-
 func ListSettings(c *gin.Context) {
 	groupStr := c.Query("group")
 	groupsStr := c.Query("groups")
@@ -158,4 +144,20 @@ func DeleteSetting(c *gin.Context) {
 
 func PublicSettings(c *gin.Context) {
 	common.SuccessResp(c, op.GetPublicSettingsMap())
+}
+
+// AT
+
+func SaveSetting(c *gin.Context) {
+	var req model.SettingItem
+	if err := c.ShouldBind(&req); err != nil {
+		common.ErrorResp(c, err, 400)
+		return
+	}
+	if err := op.SaveSettingItem(&req); err != nil {
+		common.ErrorResp(c, err, 500)
+	} else {
+		common.SuccessResp(c)
+		static.UpdateIndex()
+	}
 }

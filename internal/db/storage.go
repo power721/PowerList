@@ -69,6 +69,8 @@ func GetEnabledStorages() ([]model.Storage, error) {
 	return storages, nil
 }
 
+// AT
+
 func GetFailedStorages(pageIndex, pageSize int) ([]model.Storage, int64, error) {
 	storageDB := db.Model(&model.Storage{})
 	var count int64
