@@ -59,7 +59,7 @@ func (d *AListV3) Init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if resp.Data.Role == model.GUEST {
+	if utils.SliceContains(resp.Data.Role, model.GUEST) {
 		u := d.Address + "/api/public/settings"
 		res, err := base.RestyClient.R().Get(u)
 		if err != nil {
@@ -113,19 +113,29 @@ func (d *AListV3) List(ctx context.Context, dir model.Obj, args model.ListArgs) 
 
 func (d *AListV3) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	var resp common.Resp[FsGetResp]
+	headers := map[string]string{
+		"User-Agent": base.UserAgent,
+	}
 	// if PassUAToUpsteam is true, then pass the user-agent to the upstream
-	userAgent := base.UserAgent
 	if d.PassUAToUpsteam {
-		userAgent = args.Header.Get("user-agent")
-		if userAgent == "" {
-			userAgent = base.UserAgent
+		userAgent := args.Header.Get("user-agent")
+		if userAgent != "" {
+			headers["User-Agent"] = userAgent
+		}
+	}
+	// if PassIPToUpsteam is true, then pass the ip address to the upstream
+	if d.PassIPToUpsteam {
+		ip := args.IP
+		if ip != "" {
+			headers["X-Forwarded-For"] = ip
+			headers["X-Real-Ip"] = ip
 		}
 	}
 	_, _, err := d.request("/fs/get", http.MethodPost, func(req *resty.Request) {
 		req.SetResult(&resp).SetBody(FsGetReq{
 			Path:     file.GetPath(),
 			Password: d.MetaPassword,
-		}).SetHeader("user-agent", userAgent)
+		}).SetHeaders(headers)
 	})
 	if err != nil {
 		return nil, err
@@ -220,7 +230,7 @@ func (d *AListV3) Put(ctx context.Context, dstDir model.Obj, s model.FileStreame
 	if err != nil {
 		return err
 	}
-	log.Debugf("[alist_v3] response body: %s", string(bytes))
+	log.Debugf("[openlist] response body: %s", string(bytes))
 	if res.StatusCode >= 400 {
 		return fmt.Errorf("request failed, status: %s", res.Status)
 	}
@@ -358,8 +368,15 @@ func (d *AListV3) ArchiveDecompress(ctx context.Context, srcObj, dstDir model.Ob
 	return err
 }
 
-//func (d *AList) Other(ctx context.Context, args model.OtherArgs) (interface{}, error) {
-//	return nil, errs.NotSupport
-//}
+func (d *AListV3) ResolveLinkCacheMode(_ string) driver.LinkCacheMode {
+	var mode driver.LinkCacheMode
+	if d.PassIPToUpsteam {
+		mode |= driver.LinkCacheIP
+	}
+	if d.PassUAToUpsteam {
+		mode |= driver.LinkCacheUA
+	}
+	return mode
+}
 
 var _ driver.Driver = (*AListV3)(nil)

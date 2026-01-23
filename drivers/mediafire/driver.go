@@ -60,20 +60,24 @@ func (d *Mediafire) GetAddition() driver.Additional {
 
 // Init initializes the MediaFire driver with session token and cookie validation
 func (d *Mediafire) Init(ctx context.Context) error {
-	if d.SessionToken == "" {
-		return fmt.Errorf("Init :: [MediaFire] {critical} missing sessionToken")
-	}
-
 	if d.Cookie == "" {
 		return fmt.Errorf("Init :: [MediaFire] {critical} missing Cookie")
 	}
+
+	// If SessionToken is empty, try to get it from cookie
+	if d.SessionToken == "" {
+		if _, err := d.getSessionToken(ctx); err != nil {
+			return fmt.Errorf("Init :: [MediaFire] {critical} failed to get session token from cookie: %w", err)
+		}
+	}
+
 	// Setup rate limiter if rate limit is configured
 	if d.LimitRate > 0 {
 		d.limiter = rate.NewLimiter(rate.Limit(d.LimitRate), 1)
 	}
+
 	// Validate and refresh session token if needed
 	if _, err := d.getSessionToken(ctx); err != nil {
-
 		d.renewToken(ctx)
 
 		// Avoids 10 mins token expiry (6- 9)
@@ -387,8 +391,8 @@ func (d *Mediafire) Put(ctx context.Context, dstDir model.Obj, file model.FileSt
 		}
 	} else {
 		pollKey = checkResp.Response.ResumableUpload.UploadKey
-		up(100.0)
 	}
+	defer up(100.0)
 
 	pollResp, err := d.pollUpload(ctx, pollKey)
 	if err != nil {
@@ -412,18 +416,18 @@ func (d *Mediafire) GetDetails(ctx context.Context) (*model.StorageDetails, erro
 	if err != nil {
 		return nil, err
 	}
-	used, err := strconv.ParseUint(resp.Response.UserInfo.UsedStorageSize, 10, 64)
+	used, err := strconv.ParseInt(resp.Response.UserInfo.UsedStorageSize, 10, 64)
 	if err != nil {
 		return nil, err
 	}
-	total, err := strconv.ParseUint(resp.Response.UserInfo.StorageLimit, 10, 64)
+	total, err := strconv.ParseInt(resp.Response.UserInfo.StorageLimit, 10, 64)
 	if err != nil {
 		return nil, err
 	}
 	return &model.StorageDetails{
 		DiskUsage: model.DiskUsage{
 			TotalSpace: total,
-			FreeSpace:  total - used,
+			UsedSpace:  used,
 		},
 	}, nil
 }

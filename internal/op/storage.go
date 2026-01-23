@@ -3,7 +3,6 @@ package op
 import (
 	"context"
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"reflect"
 	"runtime"
 	"sort"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
@@ -30,120 +31,6 @@ var storagesMap generic_sync.MapOf[string, driver.Driver]
 
 func GetAllStorages() []driver.Driver {
 	return storagesMap.Values()
-}
-
-func GetStorages(name string) []driver.Driver {
-	storages := storagesMap.Values()
-	var drivers []driver.Driver
-	for _, storage := range storages {
-		if storage.Config().Name == name {
-			drivers = append(drivers, storage)
-		}
-	}
-	return drivers
-}
-
-func Get115Driver(id int) driver.Driver {
-	return GetFirstDriver("115 Cloud", id)
-}
-
-func GetDriverCount(name string) int {
-	count := 0
-	storages := storagesMap.Values()
-	for _, storage := range storages {
-		if storage.Config().Name == name {
-			count++
-		}
-	}
-	return count
-}
-
-func GetFirstDriver(name string, id int) driver.Driver {
-	prefix := ""
-	if GetBool(conf.DriverRoundRobin) {
-		return GetMasterDriver(name, prefix, id)
-	}
-
-	if name == "115 Cloud" {
-		prefix = conf.PAN115
-	} else if name == "Quark" {
-		prefix = conf.QUARK
-	} else if name == "UC" {
-		prefix = conf.UC
-	} else if name == "QuarkTV" {
-		prefix = "QUARK_TV"
-	} else if name == "UCTV" {
-		prefix = "UC_TV"
-	} else if name == "ThunderBrowser" {
-		prefix = "THUNDER"
-	} else if name == "189CloudPC" {
-		prefix = "CLOUD189"
-	} else if name == "139Yun" {
-		prefix = conf.PAN139
-	} else if name == "115 Open" {
-		prefix = conf.OPEN115
-	} else if name == "BaiduNetdisk" {
-		prefix = conf.BAIDU
-	} else if name == "123Pan" {
-		prefix = "PAN123"
-	} else if name == "AliyundriveOpen" {
-		prefix = "ali_account"
-	}
-	return GetMasterDriver(name, prefix, id)
-}
-
-func GetMasterDriver(name, prefix string, id int) driver.Driver {
-	storages := storagesMap.Values()
-	sort.Slice(storages, func(i, j int) bool {
-		return storages[i].GetStorage().ID < storages[j].GetStorage().ID
-	})
-
-	if prefix != "" {
-		id := getMasterId(prefix)
-		log.Infof("Get master id %v for %v", id, prefix)
-		if id > 0 {
-			for _, storage := range storages {
-				if storage.Config().Name == name && storage.GetStorage().ID == id {
-					return storage
-				}
-			}
-		}
-	}
-
-	var drivers []driver.Driver
-	for _, storage := range storages {
-		if storage.Config().Name == name {
-			drivers = append(drivers, storage)
-		}
-	}
-
-	if len(drivers) == 1 {
-		return drivers[0]
-	}
-
-	if len(drivers) > 1 {
-		storage := drivers[id%len(drivers)]
-		log.Debugf("Use storage %v %v %v %v", id, len(drivers), storage.Config().Name, storage.GetStorage().ID)
-		return storage
-	}
-	return nil
-}
-
-func GetBool(key string) bool {
-	val, _ := GetSettingItemByKey(key)
-	return val.Value == "true" || val.Value == "1"
-}
-
-func getMasterId(prefix string) uint {
-	val, err := GetSettingItemByKey(prefix + "_id")
-	if err != nil {
-		return 0
-	}
-	id, err := strconv.Atoi(val.Value)
-	if err != nil {
-		return 0
-	}
-	return uint(id)
 }
 
 func HasStorage(mountPath string) bool {
@@ -306,18 +193,6 @@ func EnableStorage(ctx context.Context, id uint) error {
 	return nil
 }
 
-func ReloadStorage(ctx context.Context, id uint) error {
-	storage, err := db.GetStorageById(id)
-	if err != nil {
-		return errors.WithMessage(err, "failed get storage")
-	}
-	err = LoadStorage(ctx, *storage)
-	if err != nil {
-		return errors.WithMessage(err, "failed load storage")
-	}
-	return nil
-}
-
 func DisableStorage(ctx context.Context, id uint) error {
 	storage, err := db.GetStorageById(id)
 	if err != nil {
@@ -471,38 +346,41 @@ func getStoragesByPath(path string) []driver.Driver {
 // for example, there are: /a/b,/a/c,/a/d/e,/a/b.balance1,/av
 // GetStorageVirtualFilesByPath(/a) => b,c,d
 func GetStorageVirtualFilesByPath(prefix string) []model.Obj {
-	return getStorageVirtualFilesByPath(prefix, func(_ driver.Driver, obj model.Obj) model.Obj {
-		return obj
-	})
+	return getStorageVirtualFilesByPath(prefix, nil, "")
 }
 
-func GetStorageVirtualFilesWithDetailsByPath(ctx context.Context, prefix string, hideDetails, refresh bool) []model.Obj {
+func GetStorageVirtualFilesWithDetailsByPath(ctx context.Context, prefix string, hideDetails, refresh bool, filterByName string) []model.Obj {
 	if hideDetails {
-		return GetStorageVirtualFilesByPath(prefix)
+		return getStorageVirtualFilesByPath(prefix, nil, filterByName)
 	}
 	return getStorageVirtualFilesByPath(prefix, func(d driver.Driver, obj model.Obj) model.Obj {
+		if _, ok := obj.(*model.ObjStorageDetails); ok {
+			return obj
+		}
 		ret := &model.ObjStorageDetails{
-			Obj: obj,
-			StorageDetailsWithName: model.StorageDetailsWithName{
-				StorageDetails: nil,
-				DriverName:     d.Config().Name,
-			},
+			Obj:            obj,
+			StorageDetails: nil,
 		}
-		timeoutCtx, cancel := context.WithTimeout(ctx, time.Second)
-		defer cancel()
-		details, err := GetStorageDetails(timeoutCtx, d, refresh)
-		if err != nil {
-			if !errors.Is(err, errs.NotImplement) && !errors.Is(err, errs.StorageNotInit) {
-				log.Errorf("failed get %s storage details: %+v", d.GetStorage().MountPath, err)
+		resultChan := make(chan *model.StorageDetails, 1)
+		go func(dri driver.Driver) {
+			details, err := GetStorageDetails(ctx, dri, refresh)
+			if err != nil {
+				if !errors.Is(err, errs.NotImplement) && !errors.Is(err, errs.StorageNotInit) {
+					log.Errorf("failed get %s storage details: %+v", dri.GetStorage().MountPath, err)
+				}
 			}
-			return ret
+			resultChan <- details
+		}(d)
+		select {
+		case r := <-resultChan:
+			ret.StorageDetails = r
+		case <-time.After(time.Second):
 		}
-		ret.StorageDetails = details
 		return ret
-	})
+	}, filterByName)
 }
 
-func getStorageVirtualFilesByPath(prefix string, rootCallback func(driver.Driver, model.Obj) model.Obj) []model.Obj {
+func getStorageVirtualFilesByPath(prefix string, rootCallback func(driver.Driver, model.Obj) model.Obj, filterByName string) []model.Obj {
 	files := make([]model.Obj, 0)
 	storages := storagesMap.Values()
 	sort.Slice(storages, func(i, j int) bool {
@@ -512,45 +390,60 @@ func getStorageVirtualFilesByPath(prefix string, rootCallback func(driver.Driver
 		return storages[i].GetStorage().Order < storages[j].GetStorage().Order
 	})
 
-	prefix = utils.FixAndCleanPath(prefix)
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
 	set := make(map[string]int)
 	var wg sync.WaitGroup
 	for _, v := range storages {
-		mountPath := utils.GetActualMountPath(v.GetStorage().MountPath)
 		// Exclude prefix itself and non prefix
-		if len(prefix) >= len(mountPath) || !utils.IsSubPath(prefix, mountPath) {
+		p, found := strings.CutPrefix(utils.GetActualMountPath(v.GetStorage().MountPath), prefix)
+		if !found || p == "" {
 			continue
 		}
-		names := strings.SplitN(strings.TrimPrefix(mountPath[len(prefix):], "/"), "/", 2)
-		idx, ok := set[names[0]]
-		if !ok {
-			set[names[0]] = len(files)
-			obj := &model.Object{
-				Name:     names[0],
-				Size:     0,
-				Modified: v.GetStorage().Modified,
-				IsFolder: true,
+		name, _, found := strings.Cut(p, "/")
+		if filterByName != "" && name != filterByName {
+			continue
+		}
+
+		if idx, ok := set[name]; ok {
+			if !found {
+				files[idx].(*model.Object).Mask = model.Locked | model.Virtual
+				if rootCallback != nil {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						files[idx] = rootCallback(v, files[idx])
+					}()
+				}
 			}
-			if len(names) == 1 {
-				idx = len(files)
-				files = append(files, obj)
+			continue
+		}
+		set[name] = len(files)
+		obj := &model.Object{
+			Name:     name,
+			Modified: v.GetStorage().Modified,
+			IsFolder: true,
+		}
+		if !found {
+			idx := len(files)
+			obj.Mask = model.Locked | model.Virtual
+			files = append(files, obj)
+			if rootCallback != nil {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
 					files[idx] = rootCallback(v, files[idx])
 				}()
-			} else {
-				files = append(files, obj)
 			}
-		} else if len(names) == 1 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				files[idx] = rootCallback(v, files[idx])
-			}()
+		} else {
+			obj.Mask = model.ReadOnly | model.Virtual
+			files = append(files, obj)
 		}
 	}
-	wg.Wait()
+	if rootCallback != nil {
+		wg.Wait()
+	}
 	return files
 }
 
@@ -599,4 +492,132 @@ func GetStorageDetails(ctx context.Context, storage driver.Driver, refresh ...bo
 		return ret, nil
 	})
 	return details, err
+}
+
+// AT
+
+func ReloadStorage(ctx context.Context, id uint) error {
+	storage, err := db.GetStorageById(id)
+	if err != nil {
+		return errors.WithMessage(err, "failed get storage")
+	}
+	err = LoadStorage(ctx, *storage)
+	if err != nil {
+		return errors.WithMessage(err, "failed load storage")
+	}
+	return nil
+}
+
+func GetStorages(name string) []driver.Driver {
+	storages := storagesMap.Values()
+	var drivers []driver.Driver
+	for _, storage := range storages {
+		if storage.Config().Name == name {
+			drivers = append(drivers, storage)
+		}
+	}
+	return drivers
+}
+
+func Get115Driver(id int) driver.Driver {
+	return GetFirstDriver("115 Cloud", id)
+}
+
+func GetDriverCount(name string) int {
+	count := 0
+	storages := storagesMap.Values()
+	for _, storage := range storages {
+		if storage.Config().Name == name {
+			count++
+		}
+	}
+	return count
+}
+
+func GetFirstDriver(name string, id int) driver.Driver {
+	prefix := ""
+	if GetBool(conf.DriverRoundRobin) {
+		return GetMasterDriver(name, prefix, id)
+	}
+
+	if name == "115 Cloud" {
+		prefix = conf.PAN115
+	} else if name == "Quark" {
+		prefix = conf.QUARK
+	} else if name == "UC" {
+		prefix = conf.UC
+	} else if name == "QuarkTV" {
+		prefix = "QUARK_TV"
+	} else if name == "UCTV" {
+		prefix = "UC_TV"
+	} else if name == "ThunderBrowser" {
+		prefix = "THUNDER"
+	} else if name == "189CloudPC" {
+		prefix = "CLOUD189"
+	} else if name == "139Yun" {
+		prefix = conf.PAN139
+	} else if name == "115 Open" {
+		prefix = conf.OPEN115
+	} else if name == "BaiduNetdisk" {
+		prefix = conf.BAIDU
+	} else if name == "123Pan" {
+		prefix = "PAN123"
+	} else if name == "AliyundriveOpen" {
+		prefix = "ali_account"
+	}
+	return GetMasterDriver(name, prefix, id)
+}
+
+func GetMasterDriver(name, prefix string, id int) driver.Driver {
+	storages := storagesMap.Values()
+	sort.Slice(storages, func(i, j int) bool {
+		return storages[i].GetStorage().ID < storages[j].GetStorage().ID
+	})
+
+	if prefix != "" {
+		id := getMasterId(prefix)
+		log.Infof("Get master id %v for %v", id, prefix)
+		if id > 0 {
+			for _, storage := range storages {
+				if storage.Config().Name == name && storage.GetStorage().ID == id {
+					return storage
+				}
+			}
+		}
+	}
+
+	var drivers []driver.Driver
+	for _, storage := range storages {
+		if storage.Config().Name == name {
+			drivers = append(drivers, storage)
+		}
+	}
+
+	if len(drivers) == 1 {
+		return drivers[0]
+	}
+
+	if len(drivers) > 1 {
+		storage := drivers[id%len(drivers)]
+		log.Debugf("Use storage %v %v %v %v", id, len(drivers), storage.Config().Name, storage.GetStorage().ID)
+		return storage
+	}
+	return nil
+}
+
+func GetBool(key string) bool {
+	val, _ := GetSettingItemByKey(key)
+	return val.Value == "true" || val.Value == "1"
+}
+
+func getMasterId(prefix string) uint {
+	val, err := GetSettingItemByKey(prefix + "_id")
+	if err != nil {
+		return 0
+	}
+	id, err := strconv.Atoi(val.Value)
+	if err != nil {
+		return 0
+	}
+	return uint(id)
 }

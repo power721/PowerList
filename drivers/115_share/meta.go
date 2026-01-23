@@ -1,8 +1,11 @@
 package _115_share
 
 import (
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	log "github.com/sirupsen/logrus"
 )
 
 type Addition struct {
@@ -22,8 +25,32 @@ var config = driver.Config{
 	NoUpload:    true,
 }
 
+const baseId = 20000
+
 func init() {
 	op.RegisterDriver(func() driver.Driver {
 		return &Pan115Share{}
 	})
+	op.RegisterValidateFunc(func() error {
+		return validate115Shares()
+	})
+}
+
+func validate115Shares() error {
+	storages := op.GetStorages("115 Share")
+	log.Infof("validate %v 115 shares", len(storages))
+	for _, storage := range storages {
+		driver := storage.(*Pan115Share)
+		if driver.ID < baseId {
+			continue
+		}
+		err := driver.Validate()
+		if err != nil {
+			log.Warnf("[%v] 115分享错误: %v", driver.ID, err)
+			driver.GetStorage().SetStatus(err.Error())
+			op.MustSaveDriverStorage(driver)
+		}
+		time.Sleep(1500 * time.Millisecond)
+	}
+	return nil
 }

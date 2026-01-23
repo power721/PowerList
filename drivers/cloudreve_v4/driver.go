@@ -143,6 +143,24 @@ func (d *CloudreveV4) List(ctx context.Context, dir model.Obj, args model.ListAr
 	})
 }
 
+func (d *CloudreveV4) Get(ctx context.Context, path string) (model.Obj, error) {
+	var info File
+	err := d.request(http.MethodGet, "/file/info", func(req *resty.Request) {
+		req.SetQueryParam("uri", d.RootFolderPath+path)
+	}, &info)
+	if err != nil {
+		return nil, err
+	}
+	return &model.Object{
+		ID:       info.ID,
+		Path:     info.Path,
+		Name:     info.Name,
+		Size:     info.Size,
+		Modified: info.UpdatedAt,
+		Ctime:    info.CreatedAt,
+	}, nil
+}
+
 func (d *CloudreveV4) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	var url FileUrlResp
 	err := d.request(http.MethodPost, "/file/url", func(req *resty.Request) {
@@ -299,7 +317,9 @@ func (d *CloudreveV4) Put(ctx context.Context, dstDir model.Obj, file model.File
 		case "onedrive":
 			err = d.upOneDrive(ctx, file, u, up)
 		case "s3":
-			err = d.upS3(ctx, file, u, up)
+			err = d.upS3(ctx, file, u, up, "s3")
+		case "ks3":
+			err = d.upS3(ctx, file, u, up, "ks3")
 		default:
 			return errs.NotImplement
 		}
@@ -349,7 +369,10 @@ func (d *CloudreveV4) GetDetails(ctx context.Context) (*model.StorageDetails, er
 		return nil, err
 	}
 	return &model.StorageDetails{
-		DiskUsage: driver.DiskUsageFromUsedAndTotal(r.Used, r.Total),
+		DiskUsage: model.DiskUsage{
+			TotalSpace: r.Total,
+			UsedSpace:  r.Used,
+		},
 	}, nil
 }
 

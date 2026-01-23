@@ -199,20 +199,6 @@ BuildDockerMultiplatform() {
     echo "building for $os_arch"
     go build -o build/$os/$arch/"$appName" -ldflags="$docker_lflags" -tags=jsoniter .
   done
-
-#  DOCKER_ARM_ARCHES=(linux-arm/v6 linux-arm/v7)
-#  CGO_ARGS=(armv6-linux-musleabihf-gcc armv7l-linux-musleabihf-gcc)
-#  GO_ARM=(6 7)
-#  export GOOS=linux
-#  export GOARCH=arm
-#  for i in "${!DOCKER_ARM_ARCHES[@]}"; do
-#    docker_arch=${DOCKER_ARM_ARCHES[$i]}
-#    cgo_cc=${CGO_ARGS[$i]}
-#    export GOARM=${GO_ARM[$i]}
-#    export CC=${cgo_cc}
-#    echo "building for $docker_arch"
-#    go build -o build/${docker_arch%%-*}/${docker_arch##*-}/"$appName" -ldflags="$docker_lflags" -tags=jsoniter .
-#  done
 }
 
 BuildRelease() {
@@ -235,7 +221,7 @@ BuildRelease() {
 BuildLoongGLIBC() {
   local target_abi="$2"
   local output_file="$1"
-  local oldWorldGoVersion="1.24.3"
+  local oldWorldGoVersion="1.25.0"
   
   if [ "$target_abi" = "abi1.0" ]; then
     echo building for linux-loong64-abi1.0
@@ -253,13 +239,13 @@ BuildLoongGLIBC() {
     
     # Download and setup patched Go compiler for old-world
     if ! curl -fsSL --retry 3 -H "Authorization: Bearer $GITHUB_TOKEN" \
-      "https://github.com/loong64/loong64-abi1.0-toolchains/releases/download/20250722/go${oldWorldGoVersion}.linux-amd64.tar.gz" \
+      "https://github.com/loong64/loong64-abi1.0-toolchains/releases/download/20250821/go${oldWorldGoVersion}.linux-amd64.tar.gz" \
       -o go-loong64-abi1.0.tar.gz; then
       echo "Error: Failed to download patched Go compiler for old-world ABI1.0"
       if [ -n "$GITHUB_TOKEN" ]; then
         echo "Error output from curl:"
         curl -fsSL --retry 3 -H "Authorization: Bearer $GITHUB_TOKEN" \
-          "https://github.com/loong64/loong64-abi1.0-toolchains/releases/download/20250722/go${oldWorldGoVersion}.linux-amd64.tar.gz" \
+          "https://github.com/loong64/loong64-abi1.0-toolchains/releases/download/20250821/go${oldWorldGoVersion}.linux-amd64.tar.gz" \
           -o go-loong64-abi1.0.tar.gz || true
       fi
       return 1

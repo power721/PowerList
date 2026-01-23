@@ -3,7 +3,6 @@ package _189pc
 import (
 	"context"
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	log "github.com/sirupsen/logrus"
 	"net/http"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
 	"github.com/google/uuid"
@@ -126,23 +126,21 @@ func (y *Cloud189PC) Init(ctx context.Context) (err error) {
 	// 处理家庭云ID
 	if y.FamilyID == "" {
 		if y.FamilyID, err = y.getFamilyID(); err != nil {
-			log.Warnf("[%v] getFamilyID failed: %v", y.ID, err)
-			return nil
+			return err
 		}
 	}
 
 	// 创建中转文件夹
 	if y.FamilyTransfer {
 		if err := y.createFamilyTransferFolder(); err != nil {
-			log.Warnf("[%v] createFamilyTransferFolder failed: %v", y.ID, err)
-			return nil
+			return err
 		}
 	}
 
 	// 清理转存文件节流
 	y.cleanFamilyTransferFile = utils.NewThrottle2(time.Minute, func() {
 		if err := y.cleanFamilyTransfer(context.TODO()); err != nil {
-			utils.Log.Warnf("cleanFamilyTransferFolderError: %v", err)
+			utils.Log.Errorf("cleanFamilyTransferFolderError:%s", err)
 		}
 	})
 
@@ -218,7 +216,7 @@ func (y *Cloud189PC) Link(ctx context.Context, file model.Obj, args model.LinkAr
 	}
 
 	exp := time.Hour
-	link := &model.Link{
+	like := &model.Link{
 		Expiration: &exp,
 		URL:        downloadUrl.URL + fmt.Sprintf("#storageId=%d", y.ID),
 		Header: http.Header{
@@ -238,7 +236,7 @@ func (y *Cloud189PC) Link(ctx context.Context, file model.Obj, args model.LinkAr
 			}
 		}
 	*/
-	return link, nil
+	return like, nil
 }
 
 func (y *Cloud189PC) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) (model.Obj, error) {
@@ -447,18 +445,18 @@ func (y *Cloud189PC) GetDetails(ctx context.Context) (*model.StorageDetails, err
 	if err != nil {
 		return nil, err
 	}
-	var total, free uint64
+	var total, used int64
 	if y.isFamily() {
 		total = capacityInfo.FamilyCapacityInfo.TotalSize
-		free = capacityInfo.FamilyCapacityInfo.FreeSize
+		used = capacityInfo.FamilyCapacityInfo.UsedSize
 	} else {
 		total = capacityInfo.CloudCapacityInfo.TotalSize
-		free = capacityInfo.CloudCapacityInfo.FreeSize
+		used = capacityInfo.CloudCapacityInfo.UsedSize
 	}
 	return &model.StorageDetails{
 		DiskUsage: model.DiskUsage{
 			TotalSpace: total,
-			FreeSpace:  free,
+			UsedSpace:  used,
 		},
 	}, nil
 }

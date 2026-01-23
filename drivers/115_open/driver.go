@@ -3,8 +3,6 @@ package _115_open
 import (
 	"context"
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/internal/conf"
-	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,10 +11,12 @@ import (
 	sdk "github.com/OpenListTeam/115-sdk-go"
 	"github.com/OpenListTeam/OpenList/v4/cmd/flags"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/stream"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"github.com/OpenListTeam/OpenList/v4/pkg/http_range"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"golang.org/x/time/rate"
@@ -56,6 +56,12 @@ func (d *Open115) Init(ctx context.Context) error {
 	if d.Addition.LimitRate > 0 {
 		d.limiter = rate.NewLimiter(rate.Limit(d.Addition.LimitRate), 1)
 	}
+	if d.PageSize <= 0 {
+		d.PageSize = 200
+	} else if d.PageSize > 1150 {
+		d.PageSize = 1150
+	}
+
 	return nil
 }
 
@@ -72,7 +78,7 @@ func (d *Open115) Drop(ctx context.Context) error {
 
 func (d *Open115) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 	var res []model.Obj
-	pageSize := int64(200)
+	pageSize := int64(d.PageSize)
 	offset := int64(0)
 	for {
 		if err := d.WaitLimit(ctx); err != nil {
@@ -135,23 +141,6 @@ func (d *Open115) Link(ctx context.Context, file model.Obj, args model.LinkArgs)
 		},
 		Concurrency: d.Concurrency,
 		PartSize:    d.ChunkSize * utils.KB,
-	}, nil
-}
-
-func (d *Open115) GetObjInfo(ctx context.Context, path string) (model.Obj, error) {
-	if err := d.WaitLimit(ctx); err != nil {
-		return nil, err
-	}
-	resp, err := d.client.GetFolderInfoByPath(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-	return &Obj{
-		Fid:  resp.FileID,
-		Fn:   resp.FileName,
-		Fc:   resp.FileCategory,
-		Sha1: resp.Sha1,
-		Pc:   resp.PickCode,
 	}, nil
 }
 
@@ -349,18 +338,18 @@ func (d *Open115) GetDetails(ctx context.Context) (*model.StorageDetails, error)
 	if err != nil {
 		return nil, err
 	}
-	total, err := userInfo.RtSpaceInfo.AllTotal.Size.Int64()
+	total, err := ParseInt64(userInfo.RtSpaceInfo.AllTotal.Size)
 	if err != nil {
 		return nil, err
 	}
-	free, err := userInfo.RtSpaceInfo.AllRemain.Size.Int64()
+	used, err := ParseInt64(userInfo.RtSpaceInfo.AllUse.Size)
 	if err != nil {
 		return nil, err
 	}
 	return &model.StorageDetails{
 		DiskUsage: model.DiskUsage{
-			TotalSpace: uint64(total),
-			FreeSpace:  uint64(free),
+			TotalSpace: total,
+			UsedSpace:  used,
 		},
 	}, nil
 }

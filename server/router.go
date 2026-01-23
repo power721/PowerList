@@ -122,12 +122,6 @@ func admin(g *gin.RouterGroup) {
 	meta.POST("/update", handles.UpdateMeta)
 	meta.POST("/delete", handles.DeleteMeta)
 
-	token := g.Group("/token")
-	token.GET("/list", handles.GetTokens)
-	token.GET("/get", handles.GetToken)
-	token.POST("/update", handles.UpdateToken)
-	token.POST("/delete", handles.DeleteToken)
-
 	user := g.Group("/user")
 	user.GET("/list", handles.ListUsers)
 	user.GET("/get", handles.GetUser)
@@ -141,15 +135,12 @@ func admin(g *gin.RouterGroup) {
 
 	storage := g.Group("/storage")
 	storage.GET("/list", handles.ListStorages)
-	storage.GET("/failed", handles.GetFailedStorages)
-	storage.POST("/failed", handles.ValidateStorages)
 	storage.GET("/get", handles.GetStorage)
 	storage.POST("/create", handles.CreateStorage)
 	storage.POST("/update", handles.UpdateStorage)
 	storage.POST("/delete", handles.DeleteStorage)
 	storage.POST("/enable", handles.EnableStorage)
 	storage.POST("/disable", handles.DisableStorage)
-	storage.POST("/reload", handles.ReloadStorage)
 	storage.POST("/load_all", handles.LoadAllStorages)
 
 	driver := g.Group("/driver")
@@ -160,7 +151,6 @@ func admin(g *gin.RouterGroup) {
 	setting := g.Group("/setting")
 	setting.GET("/get", handles.GetSetting)
 	setting.GET("/list", handles.ListSettings)
-	setting.POST("/update", handles.SaveSetting)
 	setting.POST("/save", handles.SaveSettings)
 	setting.POST("/delete", handles.DeleteSetting)
 	setting.POST("/default", handles.DefaultSettings)
@@ -170,6 +160,7 @@ func admin(g *gin.RouterGroup) {
 	setting.POST("/set_transmission", handles.SetTransmission)
 	setting.POST("/set_115", handles.Set115)
 	setting.POST("/set_115_open", handles.Set115Open)
+	setting.POST("/set_123_pan", handles.Set123Pan)
 	setting.POST("/set_123_open", handles.Set123Open)
 	setting.POST("/set_pikpak", handles.SetPikPak)
 	setting.POST("/set_thunder", handles.SetThunder)
@@ -189,6 +180,23 @@ func admin(g *gin.RouterGroup) {
 	index.POST("/stop", middlewares.SearchIndex, handles.StopIndex)
 	index.POST("/clear", middlewares.SearchIndex, handles.ClearIndex)
 	index.GET("/progress", middlewares.SearchIndex, handles.GetProgress)
+
+	scan := g.Group("/scan")
+	scan.POST("/start", handles.StartManualScan)
+	scan.POST("/stop", handles.StopManualScan)
+	scan.GET("/progress", handles.GetManualScanProgress)
+
+	// AT
+	token := g.Group("/token")
+	token.GET("/list", handles.GetTokens)
+	token.GET("/get", handles.GetToken)
+	token.POST("/update", handles.UpdateToken)
+	token.POST("/delete", handles.DeleteToken)
+
+	storage.GET("/failed", handles.GetFailedStorages)
+	storage.POST("/failed", handles.ValidateStorages)
+	storage.POST("/reload", handles.ReloadStorage)
+	setting.POST("/update", handles.SaveSetting)
 }
 
 func fsAndShare(g *gin.RouterGroup) {
@@ -221,6 +229,8 @@ func _fs(g *gin.RouterGroup) {
 	// g.POST("/add_transmission", handles.SetTransmission)
 	g.POST("/add_offline_download", handles.AddOfflineDownload)
 	g.POST("/archive/decompress", handles.FsArchiveDecompress)
+	// Direct upload (client-side upload to storage)
+	g.POST("/get_direct_upload_info", middlewares.FsUp, handles.FsGetDirectUploadInfo)
 }
 
 func _task(g *gin.RouterGroup) {
