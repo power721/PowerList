@@ -88,6 +88,7 @@ import (
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/baidu_share2"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/quark_uc_share"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/thunder_share"
+	_ "github.com/OpenListTeam/OpenList/v4/drivers/139_grouplink"
 )
 
 // All do nothing,just for import
