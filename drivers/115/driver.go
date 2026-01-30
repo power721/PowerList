@@ -3,11 +3,12 @@ package _115
 import (
 	"context"
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/internal/conf"
-	log "github.com/sirupsen/logrus"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	log "github.com/sirupsen/logrus"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -47,7 +48,7 @@ func (d *Pan115) Init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	d.createTempDir(ctx)
+	//d.createTempDir(ctx)
 	return nil
 }
 
