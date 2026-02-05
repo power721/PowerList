@@ -39,10 +39,11 @@ func (d *Pan115) createTempDir(ctx context.Context) {
 			clean = true
 		}
 	}
-	if !setting.GetBool(conf.AliTo115) {
+	if setting.GetBool(conf.AliTo115) {
+		log.Infof("115 temp folder id: %v", d.TempDirId)
+	} else {
 		d.TempDirId = d.ReceiveDirId
 	}
-	log.Infof("115 temp folder id: %v", d.TempDirId)
 	log.Infof("115 receive folder id: %v", d.ReceiveDirId)
 	if clean {
 		d.cleanTempDir()
