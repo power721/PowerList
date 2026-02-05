@@ -2,8 +2,10 @@ package _115
 
 import (
 	"context"
+
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	driver115 "github.com/power721/115driver/pkg/driver"
 	log "github.com/sirupsen/logrus"
 )
@@ -24,7 +26,9 @@ func (d *Pan115) createTempDir(ctx context.Context) {
 	}
 	var clean = false
 	name := conf.TempDirName
-	_, _ = d.MakeDir(ctx, dir, name)
+	if setting.GetBool(conf.AliTo115) {
+		_, _ = d.MakeDir(ctx, dir, name)
+	}
 	files, _ := d.getFiles(root)
 	for _, file := range files {
 		if file.Name == "最近接收" {
@@ -35,7 +39,11 @@ func (d *Pan115) createTempDir(ctx context.Context) {
 			clean = true
 		}
 	}
-	log.Infof("115 temp folder id: %v", d.TempDirId)
+	if setting.GetBool(conf.AliTo115) {
+		log.Infof("115 temp folder id: %v", d.TempDirId)
+	} else {
+		d.TempDirId = d.ReceiveDirId
+	}
 	log.Infof("115 receive folder id: %v", d.ReceiveDirId)
 	if clean {
 		d.cleanTempDir()
