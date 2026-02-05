@@ -48,7 +48,7 @@ func (d *Pan115) Init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	//d.createTempDir(ctx)
+	d.createTempDir(ctx)
 	return nil
 }
 
