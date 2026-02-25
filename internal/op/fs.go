@@ -259,7 +259,7 @@ func Link(ctx context.Context, storage driver.Driver, path string, args model.Li
 		}
 
 		link, err := storage.Link(ctx, file, args)
-		if err != nil {
+		if err != nil || link == nil {
 			return nil, errors.Wrapf(err, "failed get link")
 		}
 		ol := &objWithLink{link: link, obj: file}
