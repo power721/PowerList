@@ -275,6 +275,9 @@ func Link(ctx context.Context, storage driver.Driver, path string, args model.Li
 		if err != nil {
 			return nil, nil, err
 		}
+		if ol == nil || ol.link == nil {
+			return nil, nil, errors.WithStack(errs.ObjectNotFound)
+		}
 		if ol.link.SyncClosers.AcquireReference() || !ol.link.RequireReference {
 			return ol.link, ol.obj, nil
 		}
