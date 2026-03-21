@@ -5,13 +5,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/internal/conf"
-	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
@@ -106,6 +107,7 @@ func (d *BaiduNetdisk) request(furl string, method string, callback base.ReqCall
 	err := retry.Do(func() error {
 		req := base.RestyClient.R()
 		req.SetQueryParam("access_token", d.AccessToken)
+		req.SetHeader("Cookie", d.Cookie)
 		if callback != nil {
 			callback(req)
 		}
