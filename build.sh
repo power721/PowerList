@@ -159,6 +159,7 @@ BuildWin7() {
   # Build for both 386 and amd64 architectures
   for arch in "386" "amd64"; do
     echo "building for windows7-${arch}"
+    build_tags=$(GetBuildTagsForTarget "windows7-${arch}")
     export GOOS=windows
     export GOARCH=${arch}
     export CGO_ENABLED=1
@@ -173,7 +174,7 @@ BuildWin7() {
     fi
     
     # Use the patched Go compiler for Win7 compatibility
-    $(pwd)/go-win7/bin/go build -o "${1}-${arch}.exe" -ldflags="$ldflags" -tags=jsoniter .
+    $(pwd)/go-win7/bin/go build -o "${1}-${arch}.exe" -ldflags="$ldflags" -tags="$build_tags" .
   done
 }
 
@@ -243,11 +244,12 @@ BuildDockerMultiplatform() {
     cgo_cc=${CGO_ARGS[$i]}
     os=${os_arch%%-*}
     arch=${os_arch##*-}
+    build_tags=$(GetBuildTagsForTarget "$os_arch")
     export GOOS=$os
     export GOARCH=$arch
     export CC=${cgo_cc}
     echo "building for $os_arch"
-    CGO_LDFLAGS="-static" go build -o build/$os/$arch/"$appName" -ldflags="$docker_lflags" -tags=jsoniter .
+    CGO_LDFLAGS="-static" go build -o build/$os/$arch/"$appName" -ldflags="$docker_lflags" -tags="$build_tags" .
     AssertStaticBinary "build/$os/$arch/$appName"
   done
 
@@ -288,6 +290,8 @@ BuildLoongGLIBC() {
   local target_abi="$2"
   local output_file="$1"
   local oldWorldGoVersion="1.25.0"
+  local loong_tags
+  loong_tags=$(GetBuildTagsForTarget "linux-loong64")
   
   if [ "$target_abi" = "abi1.0" ]; then
     echo building for linux-loong64-abi1.0
@@ -362,7 +366,7 @@ BuildLoongGLIBC() {
         CXX="$(pwd)/gcc8-loong64-abi1.0/bin/loongarch64-linux-gnu-g++" \
         CGO_ENABLED=1 \
         GOCACHE="$abi1_cache_dir" \
-        $(pwd)/go-loong64-abi1.0/bin/go build -a -o "$output_file" -ldflags="$ldflags" -tags=jsoniter .; then
+        $(pwd)/go-loong64-abi1.0/bin/go build -a -o "$output_file" -ldflags="$ldflags" -tags="$loong_tags" .; then
       echo "Error: Build failed with patched Go compiler"
       echo "Attempting retry with cache cleanup..."
       env GOCACHE="$abi1_cache_dir" $(pwd)/go-loong64-abi1.0/bin/go clean -cache
@@ -371,7 +375,7 @@ BuildLoongGLIBC() {
           CXX="$(pwd)/gcc8-loong64-abi1.0/bin/loongarch64-linux-gnu-g++" \
           CGO_ENABLED=1 \
           GOCACHE="$abi1_cache_dir" \
-          $(pwd)/go-loong64-abi1.0/bin/go build -a -o "$output_file" -ldflags="$ldflags" -tags=jsoniter .; then
+          $(pwd)/go-loong64-abi1.0/bin/go build -a -o "$output_file" -ldflags="$ldflags" -tags="$loong_tags" .; then
         echo "Error: Build failed again after cache cleanup"
         echo "Build environment details:"
         echo "GOOS=linux"
@@ -417,11 +421,11 @@ BuildLoongGLIBC() {
     
     # Use standard Go compiler for new-world build
     echo "Building with standard Go compiler for new-world ABI2.0..."
-    if ! go build -a -o "$output_file" -ldflags="$ldflags" -tags=jsoniter .; then
+    if ! go build -a -o "$output_file" -ldflags="$ldflags" -tags="$loong_tags" .; then
       echo "Error: Build failed with standard Go compiler"
       echo "Attempting retry with cache cleanup..."
       go clean -cache
-      if ! go build -a -o "$output_file" -ldflags="$ldflags" -tags=jsoniter .; then
+      if ! go build -a -o "$output_file" -ldflags="$ldflags" -tags="$loong_tags" .; then
         echo "Error: Build failed again after cache cleanup"
         echo "Build environment details:"
         echo "GOOS=$GOOS"
@@ -441,6 +445,7 @@ BuildReleaseLinuxMusl() {
   mkdir -p "build"
   muslflags="$(GetMuslStaticLdflags)"
   BASE="https://github.com/OpenListTeam/musl-compilers/releases/latest/download/"
+  # Keep mips-family targets enabled; sqlite driver selection is handled by Go build tags.
   FILES=(x86_64-linux-musl-cross aarch64-linux-musl-cross mips-linux-musl-cross mips64-linux-musl-cross mips64el-linux-musl-cross mipsel-linux-musl-cross powerpc64le-linux-musl-cross s390x-linux-musl-cross loongarch64-linux-musl-cross)
   for i in "${FILES[@]}"; do
     url="${BASE}${i}.tgz"
@@ -453,13 +458,18 @@ BuildReleaseLinuxMusl() {
   for i in "${!OS_ARCHES[@]}"; do
     os_arch=${OS_ARCHES[$i]}
     cgo_cc=${CGO_ARGS[$i]}
+    build_tags=$(GetBuildTagsForTarget "$os_arch")
     echo building for ${os_arch}
     export GOOS=${os_arch%%-*}
     export GOARCH=${os_arch##*-}
     export CC=${cgo_cc}
     export CGO_ENABLED=1
+<<<<<<< HEAD
     CGO_LDFLAGS="-static" go build -o ./build/$appName-$os_arch -ldflags="$muslflags" -tags=jsoniter .
     AssertStaticBinary "./build/$appName-$os_arch"
+=======
+    go build -o ./build/$appName-$os_arch -ldflags="$muslflags" -tags="$build_tags" .
+>>>>>>> 7bea29c1 (refactor(db): migrate sqlite to pure-go and add mips compatibility switch (#2296))
   done
 }
 

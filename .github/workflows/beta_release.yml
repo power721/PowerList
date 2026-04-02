@@ -61,7 +61,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: "!(*musl*|*windows-arm64*|*windows7-*|*android*|*freebsd*)" # xgo and loongarch
+          - target: "!(*musl*|*windows-arm64*|*windows7-*|*android*|*freebsd*)" # xgo and loongarch (exclude mips64le)
             hash: "md5"
             flags: ""
             goflags: ""
@@ -137,6 +137,8 @@ jobs:
             github.com/OpenListTeam/OpenList/v4/internal/conf.GitCommit=$git_commit
             github.com/OpenListTeam/OpenList/v4/internal/conf.Version=$tag
             github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=rolling
+        env:
+          GOFLAGS: ${{ matrix.goflags }}
 
       - name: Verify musl binaries are static
         if: matrix.musl_static == 'true'
