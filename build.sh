@@ -50,6 +50,53 @@ ldflags="\
 -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$webVersion' \
 "
 
+# Keep sqlite driver tag selection centralized to avoid target drift.
+GetBuildTagsForTarget() {
+  local target="$1"
+  case "$target" in
+    linux-loong64|linux-mips|linux-mips64|linux-mips64le|linux-mipsle|linux-musl-loong64|linux-musl-mips|linux-musl-mips64|linux-musl-mips64le|linux-musl-mipsle|windows-386|windows7-386|windows7-amd64)
+      echo "jsoniter,sqlite_cgo_compat"
+      ;;
+    *)
+      echo "jsoniter"
+      ;;
+  esac
+}
+
+# Keep musl static link flags centralized for all musl build paths.
+GetMuslStaticLdflags() {
+  echo "-linkmode external -extldflags '-static -fpic' $ldflags"
+}
+
+# Fail fast if a musl build artifact is not fully static.
+AssertStaticBinary() {
+  local binary="$1"
+  if [ ! -f "$binary" ]; then
+    echo "Error: binary not found: $binary"
+    return 1
+  fi
+
+  if command -v readelf >/dev/null 2>&1; then
+    if readelf -l "$binary" 2>/dev/null | grep -q "Requesting program interpreter"; then
+      echo "Error: binary is not fully static: $binary"
+      readelf -l "$binary" | grep "Requesting program interpreter" || true
+      return 1
+    fi
+    return 0
+  fi
+
+  if command -v file >/dev/null 2>&1; then
+    if file "$binary" | grep -qi "dynamically linked"; then
+      echo "Error: binary is dynamically linked: $binary"
+      file "$binary"
+      return 1
+    fi
+    return 0
+  fi
+
+  echo "Warning: readelf/file not found, skip static verification for $binary"
+  return 0
+}
 FetchWebRolling() {
   pre_release_json=$(eval "curl -fsSL --max-time 2 $githubAuthArgs -H \"Accept: application/vnd.github.v3+json\" \"https://api.github.com/repos/$frontendRepo/releases/tags/rolling\"")
   pre_release_assets=$(echo "$pre_release_json" | jq -r '.assets[].browser_download_url')
@@ -133,7 +180,7 @@ BuildWin7() {
 BuildDev() {
   rm -rf .git/
   mkdir -p "dist"
-  muslflags="--extldflags '-static -fpic' $ldflags"
+  muslflags="$(GetMuslStaticLdflags)"
   BASE="https://github.com/OpenListTeam/musl-compilers/releases/latest/download/"
   FILES=(x86_64-linux-musl-cross aarch64-linux-musl-cross)
   for i in "${FILES[@]}"; do
@@ -151,7 +198,8 @@ BuildDev() {
     export GOARCH=${os_arch##*-}
     export CC=${cgo_cc}
     export CGO_ENABLED=1
-    go build -o ./dist/$appName-$os_arch -ldflags="$muslflags" -tags=jsoniter .
+    CGO_LDFLAGS="-static" go build -o ./dist/$appName-$os_arch -ldflags="$muslflags" -tags=jsoniter .
+    AssertStaticBinary "./dist/$appName-$os_arch"
   done
   xgo -targets=windows/amd64,darwin/amd64,darwin/arm64 -out "$appName" -ldflags="$ldflags" -tags=jsoniter .
   mv "$appName"-* dist
@@ -185,7 +233,7 @@ BuildDockerMultiplatform() {
   # run PrepareBuildDockerMusl before build
   export PATH=$PATH:$PWD/build/musl-libs/bin
 
-  docker_lflags="--extldflags '-static -fpic' $ldflags"
+  docker_lflags="$(GetMuslStaticLdflags)"
   export CGO_ENABLED=1
 
   OS_ARCHES=(linux-amd64 linux-arm64)
@@ -199,7 +247,23 @@ BuildDockerMultiplatform() {
     export GOARCH=$arch
     export CC=${cgo_cc}
     echo "building for $os_arch"
-    go build -o build/$os/$arch/"$appName" -ldflags="$docker_lflags" -tags=jsoniter .
+    CGO_LDFLAGS="-static" go build -o build/$os/$arch/"$appName" -ldflags="$docker_lflags" -tags=jsoniter .
+    AssertStaticBinary "build/$os/$arch/$appName"
+  done
+
+  DOCKER_ARM_ARCHES=(linux-arm/v6 linux-arm/v7)
+  CGO_ARGS=(armv6-linux-musleabihf-gcc armv7l-linux-musleabihf-gcc)
+  GO_ARM=(6 7)
+  export GOOS=linux
+  export GOARCH=arm
+  for i in "${!DOCKER_ARM_ARCHES[@]}"; do
+    docker_arch=${DOCKER_ARM_ARCHES[$i]}
+    cgo_cc=${CGO_ARGS[$i]}
+    export GOARM=${GO_ARM[$i]}
+    export CC=${cgo_cc}
+    echo "building for $docker_arch"
+    CGO_LDFLAGS="-static" go build -o build/${docker_arch%%-*}/${docker_arch##*-}/"$appName" -ldflags="$docker_lflags" -tags=jsoniter .
+    AssertStaticBinary "build/${docker_arch%%-*}/${docker_arch##*-}/$appName"
   done
 }
 
@@ -375,7 +439,7 @@ BuildLoongGLIBC() {
 
 BuildReleaseLinuxMusl() {
   mkdir -p "build"
-  muslflags="--extldflags '-static -fpic' $ldflags"
+  muslflags="$(GetMuslStaticLdflags)"
   BASE="https://github.com/OpenListTeam/musl-compilers/releases/latest/download/"
   FILES=(x86_64-linux-musl-cross aarch64-linux-musl-cross mips-linux-musl-cross mips64-linux-musl-cross mips64el-linux-musl-cross mipsel-linux-musl-cross powerpc64le-linux-musl-cross s390x-linux-musl-cross loongarch64-linux-musl-cross)
   for i in "${FILES[@]}"; do
@@ -394,13 +458,14 @@ BuildReleaseLinuxMusl() {
     export GOARCH=${os_arch##*-}
     export CC=${cgo_cc}
     export CGO_ENABLED=1
-    go build -o ./build/$appName-$os_arch -ldflags="$muslflags" -tags=jsoniter .
+    CGO_LDFLAGS="-static" go build -o ./build/$appName-$os_arch -ldflags="$muslflags" -tags=jsoniter .
+    AssertStaticBinary "./build/$appName-$os_arch"
   done
 }
 
 BuildReleaseLinuxMuslArm() {
   mkdir -p "build"
-  muslflags="--extldflags '-static -fpic' $ldflags"
+  muslflags="$(GetMuslStaticLdflags)"
   BASE="https://github.com/OpenListTeam/musl-compilers/releases/latest/download/"
   FILES=(arm-linux-musleabi-cross arm-linux-musleabihf-cross armel-linux-musleabi-cross armel-linux-musleabihf-cross armv5l-linux-musleabi-cross armv5l-linux-musleabihf-cross armv6-linux-musleabi-cross armv6-linux-musleabihf-cross armv7l-linux-musleabihf-cross armv7m-linux-musleabi-cross armv7r-linux-musleabihf-cross)
   for i in "${FILES[@]}"; do
@@ -422,7 +487,8 @@ BuildReleaseLinuxMuslArm() {
     export CC=${cgo_cc}
     export CGO_ENABLED=1
     export GOARM=${arm}
-    go build -o ./build/$appName-$os_arch -ldflags="$muslflags" -tags=jsoniter .
+    CGO_LDFLAGS="-static" go build -o ./build/$appName-$os_arch -ldflags="$muslflags" -tags=jsoniter .
+    AssertStaticBinary "./build/$appName-$os_arch"
   done
 }
 
