@@ -267,7 +267,7 @@ BuildDockerMultiplatform() {
 #    echo "building for $docker_arch"
 #    CGO_LDFLAGS="-static" go build -o build/${docker_arch%%-*}/${docker_arch##*-}/"$appName" -ldflags="$docker_lflags" -tags=jsoniter .
 #    AssertStaticBinary "build/${docker_arch%%-*}/${docker_arch##*-}/$appName"
-  done
+#  done
 }
 
 BuildRelease() {
