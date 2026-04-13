@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -20,6 +21,7 @@ type Cloud189 struct {
 	client     *resty.Client
 	rsa        Rsa
 	sessionKey string
+	autoRestoreInFlight sync.Map
 }
 
 func (d *Cloud189) Config() driver.Config {
@@ -33,10 +35,14 @@ func (d *Cloud189) GetAddition() driver.Additional {
 func (d *Cloud189) Init(ctx context.Context) error {
 	d.client = base.NewRestyClient().
 		SetHeader("Referer", "https://cloud.189.cn/")
-	return d.newLogin()
+	if err := d.newLogin(); err != nil {
+		return err
+	}
+	return d.startAutoRestoreExistingCAS()
 }
 
 func (d *Cloud189) Drop(ctx context.Context) error {
+	removeAutoRestoreWatcher(d)
 	return nil
 }
 
