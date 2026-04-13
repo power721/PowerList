@@ -114,6 +114,12 @@ func (y *Cloud189PC) linkTransferredShareFile(ctx context.Context, transferFile 
 	return linkTransferObj(ctx, y, transferFile)
 }
 
+func shouldScheduleTempCleanupForTransferredFile(transferFile model.Obj) bool {
+	// For share transfers, keep transferred .cas files because they may be needed for later inspection/debugging
+	// and because the restore flow must not delete the .cas file.
+	return !strings.HasSuffix(strings.ToLower(transferFile.GetName()), ".cas")
+}
+
 func (y *Cloud189PC) createTempDir(ctx context.Context) error {
 	dir := &Cloud189File{
 		ID: "-11",
@@ -275,33 +281,35 @@ func (y *Cloud189PC) Transfer(ctx context.Context, shareId int, fileId string, f
 	log.Debug("get new file link")
 	link, err := y.linkTransferredShareFile(ctx, transferFile)
 
-	go func() {
-		delayTime := setting.GetInt(conf.DeleteDelayTime, 900)
-		if delayTime == 0 {
-			return
-		}
+	if shouldScheduleTempCleanupForTransferredFile(transferFile) {
+		go func() {
+			delayTime := setting.GetInt(conf.DeleteDelayTime, 900)
+			if delayTime == 0 {
+				return
+			}
 
-		log.Infof("[%v] Delete 189 temp file %v after %v seconds.", y.ID, fileId, delayTime)
-		time.Sleep(time.Duration(delayTime) * time.Second)
+			log.Infof("[%v] Delete 189 temp file %v after %v seconds.", y.ID, fileId, delayTime)
+			time.Sleep(time.Duration(delayTime) * time.Second)
 
-		log.Infof("[%v] Delete 189 temp file: %v %v", y.ID, fileId, fileName)
-		removeErr := y.Remove(ctx, transferFile)
-		if removeErr != nil {
-			log.Infof("[%v] 天翼云盘删除文件:%s失败: %v", y.ID, fileName, removeErr)
-			return
-		}
-		log.Debugf("[%v] 已删除天翼云盘下的文件: %v", y.ID, fileName)
-		_, removeErr = y.CreateBatchTask("CLEAR_RECYCLE", "", "", nil, BatchTaskInfo{
-			FileId:   transferFile.GetID(),
-			FileName: transferFile.GetName(),
-			IsFolder: 0,
-		})
-		if removeErr != nil {
-			log.Infof("[%v] 天翼云盘清除回收站失败: %v", y.ID, removeErr)
-		} else {
-			log.Debugf("[%v] 天翼云盘清除回收站完成", y.ID)
-		}
-	}()
+			log.Infof("[%v] Delete 189 temp file: %v %v", y.ID, fileId, fileName)
+			removeErr := y.Remove(ctx, transferFile)
+			if removeErr != nil {
+				log.Infof("[%v] 天翼云盘删除文件:%s失败: %v", y.ID, fileName, removeErr)
+				return
+			}
+			log.Debugf("[%v] 已删除天翼云盘下的文件: %v", y.ID, fileName)
+			_, removeErr = y.CreateBatchTask("CLEAR_RECYCLE", "", "", nil, BatchTaskInfo{
+				FileId:   transferFile.GetID(),
+				FileName: transferFile.GetName(),
+				IsFolder: 0,
+			})
+			if removeErr != nil {
+				log.Infof("[%v] 天翼云盘清除回收站失败: %v", y.ID, removeErr)
+			} else {
+				log.Debugf("[%v] 天翼云盘清除回收站完成", y.ID)
+			}
+		}()
+	}
 
 	return link, err
 }

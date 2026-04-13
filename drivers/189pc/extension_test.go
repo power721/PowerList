@@ -180,3 +180,15 @@ func TestLinkTransferredShareFile_CASRestoreFailureReturnsErrorAndDoesNotFallbac
 		t.Fatalf("expected no fallback link call, got %d", linkCalls)
 	}
 }
+
+func TestTransferCleanupScheduling_SkipsCASFiles(t *testing.T) {
+	casObj := &Cloud189File{Name: "movie.mkv.cas"}
+	nonCAS := &Cloud189File{Name: "movie.mkv"}
+
+	if shouldScheduleTempCleanupForTransferredFile(casObj) {
+		t.Fatal("expected .cas transferred file to skip temp cleanup scheduling")
+	}
+	if !shouldScheduleTempCleanupForTransferredFile(nonCAS) {
+		t.Fatal("expected non-.cas transferred file to schedule temp cleanup")
+	}
+}
