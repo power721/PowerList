@@ -22,19 +22,19 @@ type stubFileStreamer struct {
 }
 
 func (s *stubFileStreamer) Read(_ []byte) (int, error) { return 0, errors.New("unexpected read") }
-func (s *stubFileStreamer) GetSize() int64              { return 0 }
-func (s *stubFileStreamer) GetName() string             { return s.name }
-func (s *stubFileStreamer) ModTime() time.Time          { return time.Time{} }
-func (s *stubFileStreamer) CreateTime() time.Time       { return time.Time{} }
-func (s *stubFileStreamer) IsDir() bool                 { return false }
-func (s *stubFileStreamer) GetHash() utils.HashInfo     { return utils.HashInfo{} }
-func (s *stubFileStreamer) GetID() string               { return "" }
-func (s *stubFileStreamer) GetPath() string             { return "" }
-func (s *stubFileStreamer) GetMimetype() string         { return "" }
-func (s *stubFileStreamer) NeedStore() bool             { return false }
-func (s *stubFileStreamer) IsForceStreamUpload() bool   { return false }
-func (s *stubFileStreamer) GetExist() model.Obj         { return nil }
-func (s *stubFileStreamer) SetExist(model.Obj)          {}
+func (s *stubFileStreamer) GetSize() int64             { return 0 }
+func (s *stubFileStreamer) GetName() string            { return s.name }
+func (s *stubFileStreamer) ModTime() time.Time         { return time.Time{} }
+func (s *stubFileStreamer) CreateTime() time.Time      { return time.Time{} }
+func (s *stubFileStreamer) IsDir() bool                { return false }
+func (s *stubFileStreamer) GetHash() utils.HashInfo    { return utils.HashInfo{} }
+func (s *stubFileStreamer) GetID() string              { return "" }
+func (s *stubFileStreamer) GetPath() string            { return "" }
+func (s *stubFileStreamer) GetMimetype() string        { return "" }
+func (s *stubFileStreamer) NeedStore() bool            { return false }
+func (s *stubFileStreamer) IsForceStreamUpload() bool  { return false }
+func (s *stubFileStreamer) GetExist() model.Obj        { return nil }
+func (s *stubFileStreamer) SetExist(model.Obj)         {}
 func (s *stubFileStreamer) RangeRead(http_range.Range) (io.Reader, error) {
 	return nil, errors.New("unexpected rangeread")
 }
@@ -43,7 +43,7 @@ func (s *stubFileStreamer) CacheFullAndWriter(*model.UpdateProgress, io.Writer) 
 }
 func (s *stubFileStreamer) GetFile() model.File { return nil }
 
-func TestLinkTransferredShareFile_NonCASUsesDirectLinkSeam(t *testing.T) {
+func TestResolveTransferredShareFile_NonCASUsesDirectLinkSeam(t *testing.T) {
 	driver := &Cloud189PC{}
 	nonCAS := &Cloud189File{Name: "movie.mkv"}
 
@@ -60,24 +60,28 @@ func TestLinkTransferredShareFile_NonCASUsesDirectLinkSeam(t *testing.T) {
 		linkSeamMu.Unlock()
 	})
 
-	link, err := driver.linkTransferredShareFile(context.Background(), nonCAS)
+	link, cleanupObj, err := driver.resolveTransferredShareFile(context.Background(), nonCAS)
 	if err != nil {
 		t.Fatalf("link non-cas transfer: %v", err)
 	}
 	if link.URL != "https://example.com/direct" {
 		t.Fatalf("expected direct link, got %q", link.URL)
 	}
+	if cleanupObj != nonCAS {
+		t.Fatalf("expected transferred object as cleanup target, got %#v", cleanupObj)
+	}
 	if directCalls != 1 {
 		t.Fatalf("expected direct link seam once, got %d", directCalls)
 	}
 }
 
-func TestLinkTransferredShareFile_CASRestoresPayloadNameEvenWhenDriverUsesCurrentName(t *testing.T) {
+func TestResolveTransferredShareFile_CASRestoresPayloadNameEvenWhenDriverUsesCurrentName(t *testing.T) {
 	driver := &Cloud189PC{
 		Addition:  Addition{RestoreSourceUseCurrentName: true},
 		TempDirId: "temp-dir-id",
 	}
 	casObj := &Cloud189File{Name: "renamed.mkv.cas"}
+	restoredObj := &Cloud189File{ID: "restored-id", Name: "payload.mkv"}
 
 	openCalls := 0
 	readCalls := 0
@@ -111,7 +115,7 @@ func TestLinkTransferredShareFile_CASRestoresPayloadNameEvenWhenDriverUsesCurren
 		if info == nil || info.Name != "payload.mkv" {
 			t.Fatalf("expected payload info, got %#v", info)
 		}
-		return &Cloud189File{ID: "restored-id", Name: "payload.mkv"}, nil
+		return restoredObj, nil
 	}
 	linkTransferObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
 		linkCalls++
@@ -125,19 +129,22 @@ func TestLinkTransferredShareFile_CASRestoresPayloadNameEvenWhenDriverUsesCurren
 		linkSeamMu.Unlock()
 	})
 
-	link, err := driver.linkTransferredShareFile(context.Background(), casObj)
+	link, cleanupObj, err := driver.resolveTransferredShareFile(context.Background(), casObj)
 	if err != nil {
 		t.Fatalf("link cas transfer: %v", err)
 	}
 	if link.URL != "https://example.com/payload.mkv" {
 		t.Fatalf("expected restored payload link, got %q", link.URL)
 	}
+	if cleanupObj != restoredObj {
+		t.Fatalf("expected restored object as cleanup target, got %#v", cleanupObj)
+	}
 	if openCalls != 1 || readCalls != 1 || restoreCalls != 1 || linkCalls != 1 {
 		t.Fatalf("expected open/read/restore/link once, got open=%d read=%d restore=%d link=%d", openCalls, readCalls, restoreCalls, linkCalls)
 	}
 }
 
-func TestLinkTransferredShareFile_CASRestoreFailureReturnsErrorAndDoesNotFallback(t *testing.T) {
+func TestResolveTransferredShareFile_CASRestoreFailureReturnsErrorAndDoesNotFallback(t *testing.T) {
 	driver := &Cloud189PC{TempDirId: "temp-dir-id"}
 	casObj := &Cloud189File{Name: "movie.mkv.cas"}
 
@@ -169,26 +176,17 @@ func TestLinkTransferredShareFile_CASRestoreFailureReturnsErrorAndDoesNotFallbac
 		linkSeamMu.Unlock()
 	})
 
-	link, err := driver.linkTransferredShareFile(context.Background(), casObj)
+	link, cleanupObj, err := driver.resolveTransferredShareFile(context.Background(), casObj)
 	if err == nil || err.Error() != "restore failed" {
 		t.Fatalf("expected restore failed error, got %v", err)
 	}
 	if link != nil {
 		t.Fatalf("expected nil link on restore failure, got %#v", link)
 	}
+	if cleanupObj != nil {
+		t.Fatalf("expected nil cleanup target on restore failure, got %#v", cleanupObj)
+	}
 	if linkCalls != 0 {
 		t.Fatalf("expected no fallback link call, got %d", linkCalls)
-	}
-}
-
-func TestTransferCleanupScheduling_SkipsCASFiles(t *testing.T) {
-	casObj := &Cloud189File{Name: "movie.mkv.cas"}
-	nonCAS := &Cloud189File{Name: "movie.mkv"}
-
-	if shouldScheduleTempCleanupForTransferredFile(casObj) {
-		t.Fatal("expected .cas transferred file to skip temp cleanup scheduling")
-	}
-	if !shouldScheduleTempCleanupForTransferredFile(nonCAS) {
-		t.Fatal("expected non-.cas transferred file to schedule temp cleanup")
 	}
 }

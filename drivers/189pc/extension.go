@@ -10,11 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
-	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/casfile"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"github.com/OpenListTeam/OpenList/v4/internal/stream"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
+	"github.com/OpenListTeam/OpenList/v4/internal/stream"
 	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	log "github.com/sirupsen/logrus"
@@ -51,16 +51,16 @@ var restoreTransferredCASFromInfo = func(ctx context.Context, y *Cloud189PC, dst
 	return y.restoreSourceFromCASInfo(ctx, dstDir, casFileName, info)
 }
 
-var restoreTransferredCASAndLink = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
+var restoreTransferredCASAndLink = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, model.Obj, error) {
 	casStream, err := openTransferredCASStream(ctx, y, obj)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer casStream.Close()
 
 	info, err := readTransferredCASInfo(casStream)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Force payload-name semantics for this restore path, regardless of the driver's config.
@@ -75,15 +75,19 @@ var restoreTransferredCASAndLink = func(ctx context.Context, y *Cloud189PC, obj 
 	}
 	restoredObj, err := restoreTransferredCASFromInfo(ctx, forcedDriver, dstDir, obj.GetName(), info)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return linkTransferObj(ctx, y, restoredObj)
+	link, err := linkTransferObj(ctx, y, restoredObj)
+	if err != nil {
+		return nil, nil, err
+	}
+	return link, restoredObj, nil
 }
 
 func cloneDriverForCASRestore(y *Cloud189PC) *Cloud189PC {
 	// Explicit field copy so we can keep sync.Map at its zero value (sync.Map must not be copied).
 	return &Cloud189PC{
-		Storage: y.Storage,
+		Storage:  y.Storage,
 		Addition: y.Addition,
 
 		identity: y.identity,
@@ -107,17 +111,15 @@ func cloneDriverForCASRestore(y *Cloud189PC) *Cloud189PC {
 	}
 }
 
-func (y *Cloud189PC) linkTransferredShareFile(ctx context.Context, transferFile model.Obj) (*model.Link, error) {
+func (y *Cloud189PC) resolveTransferredShareFile(ctx context.Context, transferFile model.Obj) (*model.Link, model.Obj, error) {
 	if strings.HasSuffix(strings.ToLower(transferFile.GetName()), ".cas") {
 		return restoreTransferredCASAndLink(ctx, y, transferFile)
 	}
-	return linkTransferObj(ctx, y, transferFile)
-}
-
-func shouldScheduleTempCleanupForTransferredFile(transferFile model.Obj) bool {
-	// For share transfers, keep transferred .cas files because they may be needed for later inspection/debugging
-	// and because the restore flow must not delete the .cas file.
-	return !strings.HasSuffix(strings.ToLower(transferFile.GetName()), ".cas")
+	link, err := linkTransferObj(ctx, y, transferFile)
+	if err != nil {
+		return nil, nil, err
+	}
+	return link, transferFile, nil
 }
 
 func (y *Cloud189PC) createTempDir(ctx context.Context) error {
@@ -279,28 +281,30 @@ func (y *Cloud189PC) Transfer(ctx context.Context, shareId int, fileId string, f
 	}
 
 	log.Debug("get new file link")
-	link, err := y.linkTransferredShareFile(ctx, transferFile)
+	link, cleanupTarget, err := y.resolveTransferredShareFile(ctx, transferFile)
 
-	if shouldScheduleTempCleanupForTransferredFile(transferFile) {
+	if cleanupTarget != nil {
 		go func() {
 			delayTime := setting.GetInt(conf.DeleteDelayTime, 900)
 			if delayTime == 0 {
 				return
 			}
 
-			log.Infof("[%v] Delete 189 temp file %v after %v seconds.", y.ID, fileId, delayTime)
+			cleanupName := cleanupTarget.GetName()
+			cleanupID := cleanupTarget.GetID()
+			log.Infof("[%v] Delete 189 temp file %v after %v seconds.", y.ID, cleanupID, delayTime)
 			time.Sleep(time.Duration(delayTime) * time.Second)
 
-			log.Infof("[%v] Delete 189 temp file: %v %v", y.ID, fileId, fileName)
-			removeErr := y.Remove(ctx, transferFile)
+			log.Infof("[%v] Delete 189 temp file: %v %v", y.ID, cleanupID, cleanupName)
+			removeErr := y.Remove(ctx, cleanupTarget)
 			if removeErr != nil {
-				log.Infof("[%v] 天翼云盘删除文件:%s失败: %v", y.ID, fileName, removeErr)
+				log.Infof("[%v] 天翼云盘删除文件:%s失败: %v", y.ID, cleanupName, removeErr)
 				return
 			}
-			log.Debugf("[%v] 已删除天翼云盘下的文件: %v", y.ID, fileName)
+			log.Debugf("[%v] 已删除天翼云盘下的文件: %v", y.ID, cleanupName)
 			_, removeErr = y.CreateBatchTask("CLEAR_RECYCLE", "", "", nil, BatchTaskInfo{
-				FileId:   transferFile.GetID(),
-				FileName: transferFile.GetName(),
+				FileId:   cleanupID,
+				FileName: cleanupName,
 				IsFolder: 0,
 			})
 			if removeErr != nil {

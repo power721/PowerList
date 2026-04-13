@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/token"
+	"html"
 	"io"
 	"net/http"
 	"strconv"
@@ -112,6 +113,7 @@ func (d *QuarkOrUC) GetFiles(parent string) ([]model.Obj, error) {
 			return nil, err
 		}
 		for _, file := range resp.Data.List {
+			file.FileName = html.UnescapeString(file.FileName)
 			if d.OnlyListVideoFile {
 				// 开启后 只列出视频文件和文件夹
 				if file.IsDir() || file.Category == 1 {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -553,6 +554,32 @@ func (xc *XunLeiBrowserCommon) Put(ctx context.Context, dstDir model.Obj, stream
 		return err
 	}
 	return nil
+}
+
+func (xc *XunLeiBrowserCommon) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	var about AboutResponse
+	_, err := xc.Request(API_URL+"/about", http.MethodGet, func(r *resty.Request) {
+		r.SetContext(ctx)
+	}, &about)
+	if err != nil {
+		return nil, err
+	}
+
+	total, err := strconv.ParseInt(about.Quota.Limit, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	used, err := strconv.ParseInt(about.Quota.Usage, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.StorageDetails{
+		DiskUsage: model.DiskUsage{
+			TotalSpace: total,
+			UsedSpace:  used,
+		},
+	}, nil
 }
 
 func (xc *XunLeiBrowserCommon) getFiles(ctx context.Context, dir model.Obj, path string) ([]model.Obj, error) {
