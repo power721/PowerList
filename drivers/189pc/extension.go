@@ -22,6 +22,22 @@ import (
 	"time"
 )
 
+var linkTransferObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
+	return y.Link(ctx, obj, model.LinkArgs{})
+}
+
+var restoreTransferredCASAndLink = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
+	// Placeholder stub; Task 1 merely introduces the branch point before real CAS restoration runs.
+	return y.Link(ctx, obj, model.LinkArgs{})
+}
+
+func (y *Cloud189PC) linkTransferredShareFile(ctx context.Context, transferFile model.Obj) (*model.Link, error) {
+	if strings.HasSuffix(strings.ToLower(transferFile.GetName()), ".cas") {
+		return restoreTransferredCASAndLink(ctx, y, transferFile)
+	}
+	return linkTransferObj(ctx, y, transferFile)
+}
+
 func (y *Cloud189PC) createTempDir(ctx context.Context) error {
 	dir := &Cloud189File{
 		ID: "-11",
@@ -181,7 +197,7 @@ func (y *Cloud189PC) Transfer(ctx context.Context, shareId int, fileId string, f
 	}
 
 	log.Debug("get new file link")
-	link, err := y.Link(ctx, transferFile, model.LinkArgs{})
+	link, err := y.linkTransferredShareFile(ctx, transferFile)
 
 	go func() {
 		delayTime := setting.GetInt(conf.DeleteDelayTime, 900)
