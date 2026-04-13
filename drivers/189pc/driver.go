@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -42,6 +43,7 @@ type Cloud189PC struct {
 	TempDirId     string
 	cron          *cron.Cron
 	client2       *resty.Client
+	autoRestoreInFlight sync.Map
 }
 
 func (y *Cloud189PC) Config() driver.Config {
@@ -149,7 +151,7 @@ func (y *Cloud189PC) Init(ctx context.Context) (err error) {
 	if err != nil {
 		log.Warnf("[%v] createTempDir failed: %v", y.ID, err)
 	}
-	return nil
+	return y.startAutoRestoreExistingCAS()
 }
 
 func (d *Cloud189PC) InitReference(storage driver.Driver) error {
@@ -163,6 +165,7 @@ func (d *Cloud189PC) InitReference(storage driver.Driver) error {
 
 func (y *Cloud189PC) Drop(ctx context.Context) error {
 	y.ref = nil
+	removeAutoRestoreWatcher(y)
 	if y.cron != nil {
 		y.cron.Stop()
 		y.cron = nil
@@ -356,13 +359,50 @@ func (y *Cloud189PC) Remove(ctx context.Context, obj model.Obj) error {
 }
 
 func (y *Cloud189PC) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) (newObj model.Obj, err error) {
+	if y.shouldRestoreSourceFromCAS(stream.GetName()) {
+		obj, err := y.restoreSourceFromCAS(ctx, dstDir, stream)
+		if err != nil {
+			return nil, err
+		}
+		if up != nil {
+			up(100)
+		}
+		return obj, nil
+	}
+
+	targetDir := dstDir
+	sourceName := stream.GetName()
+	sourceSize := stream.GetSize()
+
+	newObj, info, err := y.uploadFile(ctx, dstDir, stream, up)
+	if err != nil {
+		return nil, err
+	}
+	if info != nil {
+		info.Name = sourceName
+		info.Size = sourceSize
+	}
+	casObj, err := y.uploadCAS(ctx, targetDir, info)
+	if err != nil {
+		return nil, err
+	}
+	if casObj != nil && y.shouldDeleteSource() {
+		if err = y.deleteSource(ctx, targetDir, newObj, info); err != nil {
+			return nil, err
+		}
+		return casObj, nil
+	}
+	return newObj, nil
+}
+
+func (y *Cloud189PC) uploadFile(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) (newObj model.Obj, info *casUploadInfo, err error) {
 	overwrite := true
 	isFamily := y.isFamily()
 
 	// 响应时间长,按需启用
 	if y.Addition.RapidUpload && !stream.IsForceStreamUpload() {
-		if newObj, err := y.RapidUpload(ctx, dstDir, stream, isFamily, overwrite); err == nil {
-			return newObj, nil
+		if newObj, info, err := y.RapidUpload(ctx, dstDir, stream, isFamily, overwrite); err == nil {
+			return newObj, info, nil
 		}
 	}
 

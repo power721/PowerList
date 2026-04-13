@@ -684,7 +684,7 @@ func (y *Cloud189PC) keepAlive() {
 
 // 普通上传
 // 无法上传大小为0的文件
-func (y *Cloud189PC) StreamUpload(ctx context.Context, dstDir model.Obj, file model.FileStreamer, up driver.UpdateProgress, isFamily bool, overwrite bool) (model.Obj, error) {
+func (y *Cloud189PC) StreamUpload(ctx context.Context, dstDir model.Obj, file model.FileStreamer, up driver.UpdateProgress, isFamily bool, overwrite bool) (model.Obj, *casUploadInfo, error) {
 	// 文件大小
 	fileSize := file.GetSize()
 	// 分片大小，不得为文件大小
@@ -713,12 +713,12 @@ func (y *Cloud189PC) StreamUpload(ctx context.Context, dstDir model.Obj, file mo
 		req.SetContext(ctx)
 	}, params, &initMultiUpload, isFamily)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	ss, err := stream.NewStreamSectionReader(file, int(sliceSize), &up)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	threadG, upCtx := errgroup.NewOrderedGroupWithContext(ctx, y.uploadThread,
@@ -796,7 +796,7 @@ func (y *Cloud189PC) StreamUpload(ctx context.Context, dstDir model.Obj, file mo
 		)
 	}
 	if err = threadG.Wait(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer up(100)
 
@@ -822,31 +822,45 @@ func (y *Cloud189PC) StreamUpload(ctx context.Context, dstDir model.Obj, file mo
 			"opertype":     IF(overwrite, "3", "1"),
 		}, &resp, isFamily)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return resp.toFile(), nil
+	return resp.toFile(), &casUploadInfo{
+		Name:     file.GetName(),
+		Size:     fileSize,
+		MD5:      fileMd5Hex,
+		SliceMD5: sliceMd5Hex,
+	}, nil
 }
 
-func (y *Cloud189PC) RapidUpload(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, isFamily bool, overwrite bool) (model.Obj, error) {
+func (y *Cloud189PC) RapidUpload(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, isFamily bool, overwrite bool) (model.Obj, *casUploadInfo, error) {
 	fileMd5 := stream.GetHash().GetHash(utils.MD5)
 	if len(fileMd5) < utils.MD5.Width {
-		return nil, errors.New("invalid hash")
+		return nil, nil, errors.New("invalid hash")
 	}
 
 	uploadInfo, err := y.OldUploadCreate(ctx, dstDir.GetID(), fileMd5, stream.GetName(), fmt.Sprint(stream.GetSize()), isFamily)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if uploadInfo.FileDataExists != 1 {
-		return nil, errors.New("rapid upload fail")
+		return nil, nil, errors.New("rapid upload fail")
 	}
 
-	return y.OldUploadCommit(ctx, uploadInfo.FileCommitUrl, uploadInfo.UploadFileId, isFamily, overwrite)
+	obj, err := y.OldUploadCommit(ctx, uploadInfo.FileCommitUrl, uploadInfo.UploadFileId, isFamily, overwrite)
+	if err != nil {
+		return nil, nil, err
+	}
+	return obj, &casUploadInfo{
+		Name:     stream.GetName(),
+		Size:     stream.GetSize(),
+		MD5:      fileMd5,
+		SliceMD5: fileMd5,
+	}, nil
 }
 
 // 快传
-func (y *Cloud189PC) FastUpload(ctx context.Context, dstDir model.Obj, file model.FileStreamer, up driver.UpdateProgress, isFamily bool, overwrite bool) (model.Obj, error) {
+func (y *Cloud189PC) FastUpload(ctx context.Context, dstDir model.Obj, file model.FileStreamer, up driver.UpdateProgress, isFamily bool, overwrite bool) (model.Obj, *casUploadInfo, error) {
 	var (
 		cache = file.GetFile()
 		tmpF  *os.File
@@ -856,7 +870,7 @@ func (y *Cloud189PC) FastUpload(ctx context.Context, dstDir model.Obj, file mode
 	if _, ok := cache.(io.ReaderAt); !ok && size > 0 {
 		tmpF, err = os.CreateTemp(conf.Conf.TempDir, "file-*")
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		defer func() {
 			_ = tmpF.Close()
@@ -887,7 +901,7 @@ func (y *Cloud189PC) FastUpload(ctx context.Context, dstDir model.Obj, file mode
 	written := int64(0)
 	for i := 1; i <= count; i++ {
 		if utils.IsCanceled(ctx) {
-			return nil, ctx.Err()
+			return nil, nil, ctx.Err()
 		}
 
 		if i == count {
@@ -897,7 +911,7 @@ func (y *Cloud189PC) FastUpload(ctx context.Context, dstDir model.Obj, file mode
 		n, err := utils.CopyWithBufferN(io.MultiWriter(writers...), file, byteSize)
 		written += n
 		if err != nil && err != io.EOF {
-			return nil, err
+			return nil, nil, err
 		}
 		md5Byte := sliceMd5.Sum(nil)
 		sliceMd5Hexs = append(sliceMd5Hexs, strings.ToUpper(hex.EncodeToString(md5Byte)))
@@ -907,11 +921,11 @@ func (y *Cloud189PC) FastUpload(ctx context.Context, dstDir model.Obj, file mode
 
 	if tmpF != nil {
 		if size > 0 && written != size {
-			return nil, errs.NewErr(err, "CreateTempFile failed, incoming stream actual size= %d, expect = %d ", written, size)
+			return nil, nil, errs.NewErr(err, "CreateTempFile failed, incoming stream actual size= %d, expect = %d ", written, size)
 		}
 		_, err = tmpF.Seek(0, io.SeekStart)
 		if err != nil {
-			return nil, errs.NewErr(err, "CreateTempFile failed, can't seek to 0 ")
+			return nil, nil, errs.NewErr(err, "CreateTempFile failed, can't seek to 0 ")
 		}
 	}
 
@@ -949,7 +963,7 @@ func (y *Cloud189PC) FastUpload(ctx context.Context, dstDir model.Obj, file mode
 			req.SetContext(ctx)
 		}, params, &uploadInfo, isFamily)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		uploadProgress = &UploadProgress{
 			UploadInfo:  uploadInfo,
@@ -1000,7 +1014,7 @@ func (y *Cloud189PC) FastUpload(ctx context.Context, dstDir model.Obj, file mode
 				uploadProgress.UploadParts = utils.SliceFilter(uploadProgress.UploadParts, func(s string) bool { return s != "" })
 				base.SaveUploadProgress(y, uploadProgress, y.getTokenInfo().SessionKey, fileMd5Hex)
 			}
-			return nil, err
+			return nil, nil, err
 		}
 		defer up(100)
 	}
@@ -1016,9 +1030,14 @@ func (y *Cloud189PC) FastUpload(ctx context.Context, dstDir model.Obj, file mode
 			"opertype":     IF(overwrite, "3", "1"),
 		}, &resp, isFamily)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return resp.toFile(), nil
+	return resp.toFile(), &casUploadInfo{
+		Name:     file.GetName(),
+		Size:     size,
+		MD5:      fileMd5Hex,
+		SliceMD5: sliceMd5Hex,
+	}, nil
 }
 
 // 获取上传切片信息
@@ -1067,24 +1086,24 @@ func (y *Cloud189PC) GetMultiUploadUrls(ctx context.Context, isFamily bool, uplo
 }
 
 // 旧版本上传，家庭云不支持覆盖
-func (y *Cloud189PC) OldUpload(ctx context.Context, dstDir model.Obj, file model.FileStreamer, up driver.UpdateProgress, isFamily bool, overwrite bool) (model.Obj, error) {
+func (y *Cloud189PC) OldUpload(ctx context.Context, dstDir model.Obj, file model.FileStreamer, up driver.UpdateProgress, isFamily bool, overwrite bool) (model.Obj, *casUploadInfo, error) {
 	tempFile, fileMd5, err := stream.CacheFullAndHash(file, &up, utils.MD5)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rateLimited := driver.NewLimitedUploadStream(ctx, io.NopCloser(tempFile))
 
 	// 创建上传会话
 	uploadInfo, err := y.OldUploadCreate(ctx, dstDir.GetID(), fileMd5, file.GetName(), fmt.Sprint(file.GetSize()), isFamily)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// 网盘中不存在该文件，开始上传
 	status := GetUploadFileStatusResp{CreateUploadFileResp: *uploadInfo}
 	for status.GetSize() < file.GetSize() && status.FileDataExists != 1 {
 		if utils.IsCanceled(ctx) {
-			return nil, ctx.Err()
+			return nil, nil, ctx.Err()
 		}
 
 		header := map[string]string{
@@ -1101,7 +1120,7 @@ func (y *Cloud189PC) OldUpload(ctx context.Context, dstDir model.Obj, file model
 
 		_, err := y.put(ctx, status.FileUploadUrl, header, true, rateLimited, isFamily)
 		if err, ok := err.(*RespErr); ok && err.Code != "InputStreamReadError" {
-			return nil, err
+			return nil, nil, err
 		}
 
 		// 获取断点状态
@@ -1119,15 +1138,24 @@ func (y *Cloud189PC) OldUpload(ctx context.Context, dstDir model.Obj, file model
 			}
 		}, &status, isFamily)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if _, err := tempFile.Seek(status.GetSize(), io.SeekStart); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		up(float64(status.GetSize()) / float64(file.GetSize()) * 100)
 	}
 
-	return y.OldUploadCommit(ctx, status.FileCommitUrl, status.UploadFileId, isFamily, overwrite)
+	obj, err := y.OldUploadCommit(ctx, status.FileCommitUrl, status.UploadFileId, isFamily, overwrite)
+	if err != nil {
+		return nil, nil, err
+	}
+	return obj, &casUploadInfo{
+		Name:     file.GetName(),
+		Size:     file.GetSize(),
+		MD5:      fileMd5,
+		SliceMD5: fileMd5,
+	}, nil
 }
 
 // 创建上传会话

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -406,28 +407,49 @@ func (d *Local) Remove(ctx context.Context, obj model.Obj) error {
 }
 
 func (d *Local) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
+	var err error
 	fullPath := filepath.Join(dstDir.GetPath(), stream.GetName())
 	out, err := os.Create(fullPath)
 	if err != nil {
 		return err
 	}
+	closed := false
 	defer func() {
-		_ = out.Close()
+		if !closed {
+			_ = out.Close()
+		}
 		if errors.Is(err, context.Canceled) {
 			_ = os.Remove(fullPath)
 		}
 	}()
-	err = utils.CopyWithCtx(ctx, out, stream, stream.GetSize(), up)
+
+	var info *casUploadInfo
+	if d.shouldUploadCAS(stream.GetName()) {
+		casHasher := newCASHasherWriter()
+		err = utils.CopyWithCtx(ctx, io.MultiWriter(out, casHasher), stream, stream.GetSize(), up)
+		if err == nil {
+			info = casHasher.Info(stream.GetName())
+		}
+	} else {
+		err = utils.CopyWithCtx(ctx, out, stream, stream.GetSize(), up)
+	}
 	if err != nil {
 		return err
 	}
+	if err = out.Close(); err != nil {
+		return err
+	}
+	closed = true
 	err = os.Chtimes(fullPath, stream.ModTime(), stream.ModTime())
 	if err != nil {
 		log.Errorf("[local] failed to change time of %s: %s", fullPath, err)
 	}
-	if d.directoryMap.Has(dstDir.GetPath()) {
-		d.directoryMap.UpdateDirSize(dstDir.GetPath())
-		d.directoryMap.UpdateDirParents(dstDir.GetPath())
+	d.updateDirSize(dstDir.GetPath())
+	if err = d.uploadCAS(ctx, dstDir, info); err != nil {
+		return err
+	}
+	if err = d.deleteSource(ctx, fullPath, info); err != nil {
+		return err
 	}
 
 	return nil
