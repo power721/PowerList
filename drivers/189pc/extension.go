@@ -64,7 +64,8 @@ var restoreTransferredCASAndLink = func(ctx context.Context, y *Cloud189PC, obj 
 	}
 
 	// Force payload-name semantics for this restore path, regardless of the driver's config.
-	forcedDriver := *y
+	// Important: do not copy Cloud189PC by value, because it contains sync.Map which must not be copied after first use.
+	forcedDriver := cloneDriverForCASRestore(y)
 	forcedDriver.RestoreSourceUseCurrentName = false
 
 	dstDir := &model.Object{
@@ -72,11 +73,38 @@ var restoreTransferredCASAndLink = func(ctx context.Context, y *Cloud189PC, obj 
 		Name:     conf.TempDirName,
 		IsFolder: true,
 	}
-	restoredObj, err := restoreTransferredCASFromInfo(ctx, &forcedDriver, dstDir, obj.GetName(), info)
+	restoredObj, err := restoreTransferredCASFromInfo(ctx, forcedDriver, dstDir, obj.GetName(), info)
 	if err != nil {
 		return nil, err
 	}
 	return linkTransferObj(ctx, y, restoredObj)
+}
+
+func cloneDriverForCASRestore(y *Cloud189PC) *Cloud189PC {
+	// Explicit field copy so we can keep sync.Map at its zero value (sync.Map must not be copied).
+	return &Cloud189PC{
+		Storage: y.Storage,
+		Addition: y.Addition,
+
+		identity: y.identity,
+		client:   y.client,
+
+		loginParam:  y.loginParam,
+		qrcodeParam: y.qrcodeParam,
+
+		tokenInfo: y.tokenInfo,
+
+		uploadThread: y.uploadThread,
+
+		familyTransferFolder:    y.familyTransferFolder,
+		cleanFamilyTransferFile: y.cleanFamilyTransferFile,
+
+		storageConfig: y.storageConfig,
+		ref:           y.ref,
+		TempDirId:     y.TempDirId,
+		cron:          y.cron,
+		client2:       y.client2,
+	}
 }
 
 func (y *Cloud189PC) linkTransferredShareFile(ctx context.Context, transferFile model.Obj) (*model.Link, error) {
