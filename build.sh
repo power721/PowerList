@@ -31,7 +31,7 @@ else
 #  webVersion=$(eval "curl -fsSL --max-time 2 $githubAuthArgs \"https://api.github.com/repos/$frontendRepo/releases/latest\"" | grep "tag_name" | head -n 1 | awk -F ":" '{print $2}' | sed 's/\"//g;s/,//g;s/ //g')
 fi
 
-webVersion=4.1.9
+webVersion=4.2.1
 
 echo "backend version: $version"
 echo "frontend version: $webVersion"
