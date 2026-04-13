@@ -464,12 +464,8 @@ BuildReleaseLinuxMusl() {
     export GOARCH=${os_arch##*-}
     export CC=${cgo_cc}
     export CGO_ENABLED=1
-<<<<<<< HEAD
-    CGO_LDFLAGS="-static" go build -o ./build/$appName-$os_arch -ldflags="$muslflags" -tags=jsoniter .
+    CGO_LDFLAGS="-static" go build -o ./build/$appName-$os_arch -ldflags="$muslflags" -tags="$build_tags" .
     AssertStaticBinary "./build/$appName-$os_arch"
-=======
-    go build -o ./build/$appName-$os_arch -ldflags="$muslflags" -tags="$build_tags" .
->>>>>>> 7bea29c1 (refactor(db): migrate sqlite to pure-go and add mips compatibility switch (#2296))
   done
 }
 
