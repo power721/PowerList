@@ -1,14 +1,19 @@
 package _189pc
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	stdpath "path"
+	"strconv"
 	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/casfile"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	"github.com/go-resty/resty/v2"
 )
 
 func (y *Cloud189PC) shouldRestoreSourceFromCAS(name string) bool {
@@ -105,4 +110,63 @@ func parseAutoRestoreExistingCASPaths(raw string) []string {
 		paths = append(paths, cleaned)
 	}
 	return paths
+}
+
+func (y *Cloud189PC) restoreSourceFromCAS(ctx context.Context, dstDir model.Obj, file model.FileStreamer) (model.Obj, error) {
+	info, err := readCASRestoreInfo(file)
+	if err != nil {
+		return nil, err
+	}
+	return y.restoreSourceFromCASInfo(ctx, dstDir, file.GetName(), info)
+}
+
+func (y *Cloud189PC) restoreSourceFromCASInfo(ctx context.Context, dstDir model.Obj, casFileName string, info *casfile.Info) (model.Obj, error) {
+	restoreName, err := y.resolveRestoreSourceName(casFileName, info)
+	if err != nil {
+		return nil, err
+	}
+
+	isFamily := y.isFamily()
+	fullURL := UPLOAD_URL
+	if isFamily {
+		fullURL += "/family"
+	} else {
+		fullURL += "/person"
+	}
+
+	params := Params{
+		"parentFolderId": dstDir.GetID(),
+		"fileName":       url.QueryEscape(restoreName),
+		"fileSize":       strconv.FormatInt(info.Size, 10),
+		"sliceSize":      strconv.FormatInt(partSize(info.Size), 10),
+		"fileMd5":        strings.ToUpper(info.MD5),
+		"sliceMd5":       strings.ToUpper(info.SliceMD5),
+	}
+	if isFamily {
+		params.Set("familyId", y.FamilyID)
+	}
+
+	var initMultiUpload InitMultiUploadResp
+	_, err = y.request(fullURL+"/initMultiUpload", http.MethodGet, func(req *resty.Request) {
+		req.SetContext(ctx)
+	}, params, &initMultiUpload, isFamily)
+	if err != nil {
+		return nil, err
+	}
+	if initMultiUpload.Data.FileDataExists != 1 {
+		return nil, fmt.Errorf("restore from .cas failed: source data for %q was not found in 189CloudPC", restoreName)
+	}
+
+	var resp CommitMultiUploadFileResp
+	_, err = y.request(fullURL+"/commitMultiUploadFile", http.MethodGet, func(req *resty.Request) {
+		req.SetContext(ctx)
+	}, Params{
+		"uploadFileId": initMultiUpload.Data.UploadFileID,
+		"isLog":        "0",
+		"opertype":     "3",
+	}, &resp, isFamily)
+	if err != nil {
+		return nil, err
+	}
+	return resp.toFile(), nil
 }
