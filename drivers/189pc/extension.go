@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/casfile"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/internal/stream"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
@@ -26,9 +28,55 @@ var linkTransferObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*
 	return y.Link(ctx, obj, model.LinkArgs{})
 }
 
+var openTransferredCASStream = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (model.FileStreamer, error) {
+	link, err := y.Link(ctx, obj, model.LinkArgs{})
+	if err != nil {
+		return nil, err
+	}
+	casStream, err := stream.NewSeekableStream(&stream.FileStream{
+		Ctx: ctx,
+		Obj: obj,
+	}, link)
+	if err != nil {
+		return nil, err
+	}
+	return casStream, nil
+}
+
+var readTransferredCASInfo = func(file model.FileStreamer) (*casfile.Info, error) {
+	return readCASRestoreInfo(file)
+}
+
+var restoreTransferredCASFromInfo = func(ctx context.Context, y *Cloud189PC, dstDir model.Obj, casFileName string, info *casfile.Info) (model.Obj, error) {
+	return y.restoreSourceFromCASInfo(ctx, dstDir, casFileName, info)
+}
+
 var restoreTransferredCASAndLink = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
-	// Placeholder stub; Task 1 merely introduces the branch point before real CAS restoration runs.
-	return y.Link(ctx, obj, model.LinkArgs{})
+	casStream, err := openTransferredCASStream(ctx, y, obj)
+	if err != nil {
+		return nil, err
+	}
+	defer casStream.Close()
+
+	info, err := readTransferredCASInfo(casStream)
+	if err != nil {
+		return nil, err
+	}
+
+	// Force payload-name semantics for this restore path, regardless of the driver's config.
+	forcedDriver := *y
+	forcedDriver.RestoreSourceUseCurrentName = false
+
+	dstDir := &model.Object{
+		ID:       y.TempDirId,
+		Name:     conf.TempDirName,
+		IsFolder: true,
+	}
+	restoredObj, err := restoreTransferredCASFromInfo(ctx, &forcedDriver, dstDir, obj.GetName(), info)
+	if err != nil {
+		return nil, err
+	}
+	return linkTransferObj(ctx, y, restoredObj)
 }
 
 func (y *Cloud189PC) linkTransferredShareFile(ctx context.Context, transferFile model.Obj) (*model.Link, error) {
