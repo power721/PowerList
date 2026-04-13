@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -42,6 +43,7 @@ type Cloud189PC struct {
 	TempDirId     string
 	cron          *cron.Cron
 	client2       *resty.Client
+	autoRestoreInFlight sync.Map
 }
 
 func (y *Cloud189PC) Config() driver.Config {
