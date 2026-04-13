@@ -1,8 +1,10 @@
 package _189
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"strconv"
 	stdpath "path"
 	"strings"
 
@@ -105,4 +107,76 @@ func parseAutoRestoreExistingCASPaths(raw string) []string {
 		paths = append(paths, cleaned)
 	}
 	return paths
+}
+
+func (d *Cloud189) restoreSourceFromCAS(ctx context.Context, dstDir model.Obj, file model.FileStreamer) (model.Obj, error) {
+	info, err := readCASRestoreInfo(file)
+	if err != nil {
+		return nil, err
+	}
+	return d.restoreSourceFromCASInfo(ctx, dstDir, file.GetName(), info)
+}
+
+func (d *Cloud189) restoreSourceFromCASInfo(ctx context.Context, dstDir model.Obj, casFileName string, info *casfile.Info) (model.Obj, error) {
+	restoreName, err := d.resolveRestoreSourceName(casFileName, info)
+	if err != nil {
+		return nil, err
+	}
+
+	sessionKey, err := d.getSessionKey()
+	if err != nil {
+		return nil, err
+	}
+	d.sessionKey = sessionKey
+
+	res, err := d.uploadRequest("/person/initMultiUpload", map[string]string{
+		"parentFolderId": dstDir.GetID(),
+		"fileName":       encode(restoreName),
+		"fileSize":       strconv.FormatInt(info.Size, 10),
+		"sliceSize":      strconv.FormatInt(cloud189CASSliceSize, 10),
+		"fileMd5":        info.MD5,
+		"sliceMd5":       info.SliceMD5,
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	uploadFileID := utils.Json.Get(res, "data", "uploadFileId").ToString()
+	if uploadFileID == "" {
+		return nil, fmt.Errorf("restore from .cas failed: upload session for %q is missing uploadFileId", restoreName)
+	}
+	fileDataExists := utils.Json.Get(res, "data", "fileDataExists").ToInt() == 1
+	if !fileDataExists {
+		res, err = d.uploadRequest("/person/checkTransSecond", map[string]string{
+			"fileMd5":      info.MD5,
+			"sliceMd5":     info.SliceMD5,
+			"uploadFileId": uploadFileID,
+		}, nil)
+		if err != nil {
+			return nil, err
+		}
+		fileDataExists = utils.Json.Get(res, "data", "fileDataExists").ToInt() == 1
+	}
+	if !fileDataExists {
+		return nil, fmt.Errorf("restore from .cas failed: source data for %q was not found in 189Cloud", restoreName)
+	}
+
+	_, err = d.uploadRequest("/person/commitMultiUploadFile", map[string]string{
+		"uploadFileId": uploadFileID,
+		"fileMd5":      info.MD5,
+		"sliceMd5":     info.SliceMD5,
+		"lazyCheck":    "1",
+		"opertype":     "3",
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if obj, err := d.findFileByName(dstDir.GetID(), restoreName); err == nil {
+		return obj, nil
+	}
+	return &model.Object{
+		Name: restoreName,
+		Size: info.Size,
+	}, nil
 }
