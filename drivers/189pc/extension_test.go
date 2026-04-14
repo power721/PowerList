@@ -4,14 +4,19 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/casfile"
+	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/http_range"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	"github.com/go-resty/resty/v2"
 )
 
 var linkSeamMu sync.Mutex
@@ -188,5 +193,109 @@ func TestResolveTransferredShareFile_CASRestoreFailureReturnsErrorAndDoesNotFall
 	}
 	if linkCalls != 0 {
 		t.Fatalf("expected no fallback link call, got %d", linkCalls)
+	}
+}
+
+func TestCloneDriverForCASRestore_ClonesCurrentFieldsAndResetsAutoRestoreState(t *testing.T) {
+	cleanupCalled := 0
+	cleanup := func() {
+		cleanupCalled++
+	}
+	source := &Cloud189PC{
+		Storage: model.Storage{
+			ID:              189,
+			MountPath:       "/189pc",
+			CacheExpiration: 123,
+			Remark:          "test-storage",
+		},
+		Addition: Addition{
+			Username:                    "user",
+			Password:                    "pass",
+			Type:                        "family",
+			FamilyID:                    "family-id",
+			RestoreSourceUseCurrentName: true,
+			AutoRestoreExistingCAS:      true,
+		},
+		identity:                "identity",
+		client:                  resty.New(),
+		loginParam:              &LoginParam{RsaUsername: "rsa-user", RsaPassword: "rsa-pass"},
+		qrcodeParam:             &QRLoginParam{UUID: "uuid"},
+		tokenInfo:               &AppSessionResp{AccessToken: "access", RefreshToken: "refresh"},
+		uploadThread:            9,
+		familyTransferFolder:    &Cloud189Folder{Name: "family-temp"},
+		cleanFamilyTransferFile: cleanup,
+		storageConfig: driver.Config{
+			Name:              "189CloudPC",
+			DefaultRoot:       "-11",
+			OnlyProxy:         true,
+			NoOverwriteUpload: true,
+		},
+		TempDirId: "temp-dir-id",
+		cron:      cron.NewCron(time.Minute),
+		client2: resty.New().SetRedirectPolicy(resty.RedirectPolicyFunc(func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		})),
+	}
+	source.ref = source
+	source.autoRestoreInFlight.Store("busy.cas", struct{}{})
+
+	cloned := cloneDriverForCASRestore(source)
+	if cloned == source {
+		t.Fatal("expected clone to allocate a distinct driver")
+	}
+	if !reflect.DeepEqual(source.Storage, cloned.Storage) {
+		t.Fatalf("expected storage copied, got %#v", cloned.Storage)
+	}
+	if !reflect.DeepEqual(source.Addition, cloned.Addition) {
+		t.Fatalf("expected addition copied, got %#v", cloned.Addition)
+	}
+	if cloned.identity != source.identity {
+		t.Fatalf("expected identity %q, got %q", source.identity, cloned.identity)
+	}
+	if cloned.client != source.client {
+		t.Fatalf("expected client pointer copied")
+	}
+	if cloned.loginParam != source.loginParam {
+		t.Fatalf("expected loginParam pointer copied")
+	}
+	if cloned.qrcodeParam != source.qrcodeParam {
+		t.Fatalf("expected qrcodeParam pointer copied")
+	}
+	if cloned.tokenInfo != source.tokenInfo {
+		t.Fatalf("expected tokenInfo pointer copied")
+	}
+	if cloned.uploadThread != source.uploadThread {
+		t.Fatalf("expected uploadThread %d, got %d", source.uploadThread, cloned.uploadThread)
+	}
+	if cloned.familyTransferFolder != source.familyTransferFolder {
+		t.Fatalf("expected familyTransferFolder pointer copied")
+	}
+	if cloned.cleanFamilyTransferFile == nil {
+		t.Fatal("expected cleanFamilyTransferFile copied")
+	}
+	cloned.cleanFamilyTransferFile()
+	if cleanupCalled != 1 {
+		t.Fatalf("expected cloned cleanup func to call original closure once, got %d", cleanupCalled)
+	}
+	if !reflect.DeepEqual(source.storageConfig, cloned.storageConfig) {
+		t.Fatalf("expected storageConfig copied, got %#v", cloned.storageConfig)
+	}
+	if cloned.ref != source.ref {
+		t.Fatalf("expected ref pointer copied")
+	}
+	if cloned.TempDirId != source.TempDirId {
+		t.Fatalf("expected TempDirId %q, got %q", source.TempDirId, cloned.TempDirId)
+	}
+	if cloned.cron != source.cron {
+		t.Fatalf("expected cron pointer copied")
+	}
+	if cloned.client2 != source.client2 {
+		t.Fatalf("expected client2 pointer copied")
+	}
+	if !cloned.beginAutoRestore("busy.cas") {
+		t.Fatal("expected clone autoRestoreInFlight to start empty")
+	}
+	if source.beginAutoRestore("busy.cas") {
+		t.Fatal("expected source autoRestoreInFlight to keep existing state")
 	}
 }

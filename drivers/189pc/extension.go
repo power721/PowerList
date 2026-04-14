@@ -9,6 +9,12 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/casfile"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -17,11 +23,8 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/stream"
 	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
-	"net/http"
-	"strconv"
-	"strings"
-	"time"
 )
 
 var linkTransferObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
@@ -48,6 +51,7 @@ var readTransferredCASInfo = func(file model.FileStreamer) (*casfile.Info, error
 }
 
 var restoreTransferredCASFromInfo = func(ctx context.Context, y *Cloud189PC, dstDir model.Obj, casFileName string, info *casfile.Info) (model.Obj, error) {
+	log.Debugf("restoreSourceFromCASInfo: %+v to directory %+v", info, dstDir)
 	return y.restoreSourceFromCASInfo(ctx, dstDir, casFileName, info)
 }
 
@@ -73,11 +77,21 @@ var restoreTransferredCASAndLink = func(ctx context.Context, y *Cloud189PC, obj 
 		Name:     conf.TempDirName,
 		IsFolder: true,
 	}
+	if y.FamilyID != "" {
+		dstDir = &model.Object{
+			ID:       y.familyTransferFolder.GetID(),
+			Name:     y.familyTransferFolder.GetName(),
+			IsFolder: true,
+		}
+		forcedDriver.Type = "family"
+	}
+	log.Debugf("restore to %v %v", forcedDriver.Type, y.FamilyID)
 	restoredObj, err := restoreTransferredCASFromInfo(ctx, forcedDriver, dstDir, obj.GetName(), info)
 	if err != nil {
 		return nil, nil, err
 	}
-	link, err := linkTransferObj(ctx, y, restoredObj)
+	log.Debugf("linkTransferObj: %+v", restoredObj)
+	link, err := linkTransferObj(ctx, forcedDriver, restoredObj)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -85,29 +99,25 @@ var restoreTransferredCASAndLink = func(ctx context.Context, y *Cloud189PC, obj 
 }
 
 func cloneDriverForCASRestore(y *Cloud189PC) *Cloud189PC {
-	// Explicit field copy so we can keep sync.Map at its zero value (sync.Map must not be copied).
+	// Positional construction keeps this clone in lockstep with Cloud189PC's field list
+	// while still leaving sync.Map at its zero value (sync.Map must not be copied).
 	return &Cloud189PC{
-		Storage:  y.Storage,
-		Addition: y.Addition,
-
-		identity: y.identity,
-		client:   y.client,
-
-		loginParam:  y.loginParam,
-		qrcodeParam: y.qrcodeParam,
-
-		tokenInfo: y.tokenInfo,
-
-		uploadThread: y.uploadThread,
-
-		familyTransferFolder:    y.familyTransferFolder,
-		cleanFamilyTransferFile: y.cleanFamilyTransferFile,
-
-		storageConfig: y.storageConfig,
-		ref:           y.ref,
-		TempDirId:     y.TempDirId,
-		cron:          y.cron,
-		client2:       y.client2,
+		y.Storage,
+		y.Addition,
+		y.identity,
+		y.client,
+		y.loginParam,
+		y.qrcodeParam,
+		y.tokenInfo,
+		y.uploadThread,
+		y.familyTransferFolder,
+		y.cleanFamilyTransferFile,
+		y.storageConfig,
+		y.ref,
+		y.TempDirId,
+		y.cron,
+		y.client2,
+		sync.Map{},
 	}
 }
 
@@ -122,7 +132,28 @@ func (y *Cloud189PC) resolveTransferredShareFile(ctx context.Context, transferFi
 	return link, transferFile, nil
 }
 
+func (y *Cloud189PC) createFamilyTempDir() error {
+	var rootFolder Cloud189Folder
+	_, err := y.post(API_URL+"/family/file/createFolder.action", func(req *resty.Request) {
+		req.SetQueryParams(map[string]string{
+			"folderName": conf.TempDirName,
+			"familyId":   y.FamilyID,
+		})
+	}, &rootFolder, true)
+	if err != nil {
+		return err
+	}
+	y.familyTransferFolder = &rootFolder
+
+	log.Info("189Cloud family temp folder id: ", rootFolder.GetID())
+	return nil
+}
+
 func (y *Cloud189PC) createTempDir(ctx context.Context) error {
+	if y.FamilyID != "" {
+		y.createFamilyTempDir()
+	}
+
 	dir := &Cloud189File{
 		ID: "-11",
 	}
@@ -241,11 +272,10 @@ func (y *Cloud189PC) Transfer(ctx context.Context, shareId int, fileId string, f
 		return nil, errors.New("no token found")
 	}
 
-	isFamily := y.isFamily()
 	other := map[string]string{"shareId": strconv.Itoa(shareId)}
 
 	log.Debug("create share save task")
-	resp, err := y.CreateBatchTask("SHARE_SAVE", IF(isFamily, y.FamilyID, ""), y.TempDirId, other, BatchTaskInfo{
+	resp, err := y.CreateBatchTask("SHARE_SAVE", "", y.TempDirId, other, BatchTaskInfo{
 		FileId:   fileId,
 		FileName: fileName,
 		IsFolder: 0,
@@ -284,6 +314,11 @@ func (y *Cloud189PC) Transfer(ctx context.Context, shareId int, fileId string, f
 	link, cleanupTarget, err := y.resolveTransferredShareFile(ctx, transferFile)
 
 	if cleanupTarget != nil {
+		driver := y
+		if cleanupTarget != transferFile && y.FamilyID != "" {
+			driver = cloneDriverForCASRestore(y)
+			driver.Type = "family"
+		}
 		go func() {
 			delayTime := setting.GetInt(conf.DeleteDelayTime, 900)
 			if delayTime == 0 {
@@ -292,25 +327,25 @@ func (y *Cloud189PC) Transfer(ctx context.Context, shareId int, fileId string, f
 
 			cleanupName := cleanupTarget.GetName()
 			cleanupID := cleanupTarget.GetID()
-			log.Infof("[%v] Delete 189 temp file %v after %v seconds.", y.ID, cleanupID, delayTime)
+			log.Infof("[%v] Delete 189 temp file %v after %v seconds.", driver.ID, cleanupID, delayTime)
 			time.Sleep(time.Duration(delayTime) * time.Second)
 
-			log.Infof("[%v] Delete 189 temp file: %v %v", y.ID, cleanupID, cleanupName)
-			removeErr := y.Remove(ctx, cleanupTarget)
+			log.Infof("[%v] Delete 189 temp file: %v %v", driver.ID, cleanupID, cleanupName)
+			removeErr := driver.Remove(ctx, cleanupTarget)
 			if removeErr != nil {
-				log.Infof("[%v] 天翼云盘删除文件:%s失败: %v", y.ID, cleanupName, removeErr)
+				log.Infof("[%v] 天翼云盘删除文件:%s失败: %v", driver.ID, cleanupName, removeErr)
 				return
 			}
-			log.Debugf("[%v] 已删除天翼云盘下的文件: %v", y.ID, cleanupName)
-			_, removeErr = y.CreateBatchTask("CLEAR_RECYCLE", "", "", nil, BatchTaskInfo{
+			log.Debugf("[%v] 已删除天翼云盘下的文件: %v", driver.ID, cleanupName)
+			_, removeErr = driver.CreateBatchTask("CLEAR_RECYCLE", driver.FamilyID, "", nil, BatchTaskInfo{
 				FileId:   cleanupID,
 				FileName: cleanupName,
 				IsFolder: 0,
 			})
 			if removeErr != nil {
-				log.Infof("[%v] 天翼云盘清除回收站失败: %v", y.ID, removeErr)
+				log.Infof("[%v] 天翼云盘清除回收站失败: %v", driver.ID, removeErr)
 			} else {
-				log.Debugf("[%v] 天翼云盘清除回收站完成", y.ID)
+				log.Debugf("[%v] 天翼云盘清除回收站完成", driver.ID)
 			}
 		}()
 	}
