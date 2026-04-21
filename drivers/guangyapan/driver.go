@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
@@ -339,6 +341,97 @@ func (d *GuangYaPan) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 	return d.waitTaskDone(ctx, taskID)
 }
 
+func (d *GuangYaPan) Put(ctx context.Context, dstDir model.Obj, file model.FileStreamer, up driver.UpdateProgress) (model.Obj, error) {
+	if err := d.ensureAccessToken(ctx); err != nil {
+		return nil, err
+	}
+	if file == nil {
+		return nil, errors.New("file is nil")
+	}
+	if file.GetSize() < 0 {
+		return nil, errors.New("invalid file size")
+	}
+	name := strings.TrimSpace(file.GetName())
+	if name == "" {
+		return nil, errors.New("file name is empty")
+	}
+
+	parentID := dstDir.GetID()
+	if parentID == d.RootFolderID {
+		parentID = ""
+	}
+
+	token, code, err := d.getUploadToken(ctx, parentID, name, file.GetSize())
+	if err != nil {
+		return nil, err
+	}
+	taskID := strings.TrimSpace(token.TaskID)
+	if code == 156 {
+		obj, err := d.waitUploadTaskInfo(ctx, taskID)
+		if err != nil {
+			return nil, err
+		}
+		if obj == nil {
+			obj = &model.Object{}
+		}
+		return &model.Object{
+			ID:       obj.GetID(),
+			Name:     name,
+			Size:     file.GetSize(),
+			Modified: file.ModTime(),
+			Ctime:    file.CreateTime(),
+		}, nil
+	}
+
+	if token.ObjectPath == "" || token.BucketName == "" || token.EndPoint == "" || token.AccessKeyID == "" || token.SecretAccessKey == "" {
+		return nil, errors.New("upload token is incomplete")
+	}
+
+	ossEndpoint := normalizeOSSEndpoint(token.EndPoint, token.BucketName)
+	client, err := oss.New(ossEndpoint, token.AccessKeyID, token.SecretAccessKey, oss.SecurityToken(token.SessionToken))
+	if err != nil {
+		return nil, fmt.Errorf("create oss client failed: %w", err)
+	}
+	bucket, err := client.Bucket(token.BucketName)
+	if err != nil {
+		return nil, fmt.Errorf("create oss bucket failed: %w", err)
+	}
+
+	if file.GetSize() == 0 {
+		if err := bucket.PutObject(token.ObjectPath, strings.NewReader("")); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := d.multipartUploadToOSS(ctx, bucket, token.ObjectPath, file, up); err != nil {
+			return nil, err
+		}
+	}
+
+	if taskID == "" {
+		return &model.Object{
+			Name:     name,
+			Size:     file.GetSize(),
+			Modified: file.ModTime(),
+			Ctime:    file.CreateTime(),
+		}, nil
+	}
+
+	obj, err := d.waitUploadTaskInfo(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	if obj == nil {
+		obj = &model.Object{}
+	}
+	return &model.Object{
+		ID:       obj.GetID(),
+		Name:     name,
+		Size:     file.GetSize(),
+		Modified: file.ModTime(),
+		Ctime:    file.CreateTime(),
+	}, nil
+}
+
 func (d *GuangYaPan) ensureAccessToken(ctx context.Context) error {
 	if strings.TrimSpace(d.AccessToken) != "" {
 		return nil
@@ -628,6 +721,130 @@ func (d *GuangYaPan) waitTaskDone(ctx context.Context, taskID string) error {
 	return fmt.Errorf("task %s timeout", taskID)
 }
 
+func (d *GuangYaPan) getUploadToken(ctx context.Context, parentID, name string, size int64) (*uploadTokenData, int, error) {
+	var out uploadTokenResp
+	err := d.postAPI(ctx, "/nd.bizuserres.s/v1/get_res_center_token", map[string]any{
+		"capacity": 2,
+		"name":     name,
+		"parentId": parentID,
+		"res": map[string]any{
+			"fileSize": size,
+		},
+	}, &out)
+	if err != nil {
+		return nil, 0, err
+	}
+	msg := strings.TrimSpace(out.Msg)
+	if msg != "" && !strings.EqualFold(msg, "success") {
+		return nil, out.Code, fmt.Errorf("get upload token failed: %s", msg)
+	}
+	if out.Data.TaskID == "" {
+		return nil, out.Code, errors.New("get upload token failed: empty task id")
+	}
+	if out.Data.AccessKeyID == "" {
+		out.Data.AccessKeyID = out.Data.Creds.AccessKeyID
+	}
+	if out.Data.SecretAccessKey == "" {
+		out.Data.SecretAccessKey = out.Data.Creds.SecretAccessKey
+	}
+	if out.Data.SessionToken == "" {
+		out.Data.SessionToken = out.Data.Creds.SessionToken
+	}
+	if strings.TrimSpace(out.Data.EndPoint) == "" {
+		out.Data.EndPoint = strings.TrimSpace(out.Data.FullEndPoint)
+	}
+	if strings.TrimSpace(out.Data.EndPoint) != "" && !strings.HasPrefix(out.Data.EndPoint, "http://") && !strings.HasPrefix(out.Data.EndPoint, "https://") {
+		if strings.TrimSpace(out.Data.FullEndPoint) != "" {
+			out.Data.EndPoint = strings.TrimSpace(out.Data.FullEndPoint)
+		} else if strings.TrimSpace(out.Data.BucketName) != "" {
+			host := strings.TrimSpace(out.Data.EndPoint)
+			prefix := strings.TrimSpace(out.Data.BucketName) + "."
+			if strings.HasPrefix(host, prefix) {
+				out.Data.EndPoint = "https://" + host
+			} else {
+				out.Data.EndPoint = "https://" + strings.TrimSpace(out.Data.BucketName) + "." + host
+			}
+		} else {
+			out.Data.EndPoint = "https://" + strings.TrimSpace(out.Data.EndPoint)
+		}
+	}
+	return &out.Data, out.Code, nil
+}
+
+func (d *GuangYaPan) waitUploadTaskInfo(ctx context.Context, taskID string) (*model.Object, error) {
+	const (
+		maxTry   = 300
+		interval = 1 * time.Second
+	)
+	for i := 0; i < maxTry; i++ {
+		var out taskInfoResp
+		if err := d.postAPI(ctx, "/nd.bizuserres.s/v1/file/get_info_by_task_id", map[string]any{
+			"taskId": taskID,
+		}, &out); err != nil {
+			return nil, err
+		}
+		if out.Data.FileID != "" {
+			return &model.Object{ID: out.Data.FileID}, nil
+		}
+		switch out.Code {
+		case 145, 146, 147, 155, 163, 0:
+		default:
+			if strings.TrimSpace(out.Msg) != "" {
+				return nil, fmt.Errorf("upload task failed: code=%d msg=%s", out.Code, strings.TrimSpace(out.Msg))
+			}
+		}
+		if i == maxTry-1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+	return nil, fmt.Errorf("upload task %s timeout", taskID)
+}
+
+func (d *GuangYaPan) multipartUploadToOSS(ctx context.Context, bucket *oss.Bucket, objectPath string, file model.FileStreamer, up driver.UpdateProgress) error {
+	partSize := calcUploadPartSize(file.GetSize())
+	imur, err := bucket.InitiateMultipartUpload(objectPath, oss.Sequential())
+	if err != nil {
+		return err
+	}
+
+	total := file.GetSize()
+	partCount := int((total + partSize - 1) / partSize)
+	parts := make([]oss.UploadPart, 0, partCount)
+	var uploaded int64
+	partNumber := 1
+
+	for uploaded < total {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		curPartSize := partSize
+		left := total - uploaded
+		if left < curPartSize {
+			curPartSize = left
+		}
+
+		reader := io.LimitReader(file, curPartSize)
+		part, err := bucket.UploadPart(imur, driver.NewLimitedUploadStream(ctx, reader), curPartSize, partNumber)
+		if err != nil {
+			return err
+		}
+		parts = append(parts, part)
+		uploaded += curPartSize
+		partNumber++
+		if total > 0 {
+			up(100 * float64(uploaded) / float64(total))
+		}
+	}
+
+	_, err = bucket.CompleteMultipartUpload(imur, parts)
+	return err
+}
+
 func normalizeCaptchaUsername(phone string) string {
 	p := strings.TrimSpace(phone)
 	p = strings.ReplaceAll(p, " ", "")
@@ -720,3 +937,11 @@ func calcUploadPartSize(size int64) int64 {
 		return 8 * mb
 	}
 }
+
+var _ driver.Driver = (*GuangYaPan)(nil)
+var _ driver.Mkdir = (*GuangYaPan)(nil)
+var _ driver.Rename = (*GuangYaPan)(nil)
+var _ driver.Move = (*GuangYaPan)(nil)
+var _ driver.Copy = (*GuangYaPan)(nil)
+var _ driver.Remove = (*GuangYaPan)(nil)
+var _ driver.PutResult = (*GuangYaPan)(nil)
