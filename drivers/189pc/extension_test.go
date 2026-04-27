@@ -299,3 +299,28 @@ func TestCloneDriverForCASRestore_ClonesCurrentFieldsAndResetsAutoRestoreState(t
 		t.Fatal("expected source autoRestoreInFlight to keep existing state")
 	}
 }
+
+func TestCollectTransferredShareCandidates_PreservesExactMatchAndDiagnostics(t *testing.T) {
+	files := []model.Obj{
+		&Cloud189File{ID: "old-id", Name: "movie.mkv.cas"},
+		&Cloud189File{ID: "other-id", Name: "other-file.cas"},
+		&Cloud189File{ID: "new-id", Name: "movie.mkv.cas"},
+	}
+
+	matched, candidates := collectTransferredShareCandidates(files, "movie.mkv.cas")
+
+	if matched == nil {
+		t.Fatal("expected a matching transferred share object")
+	}
+	if matched.GetID() != "old-id" {
+		t.Fatalf("expected first exact match id old-id, got %q", matched.GetID())
+	}
+	wantCandidates := []string{
+		"movie.mkv.cas(old-id)",
+		"other-file.cas(other-id)",
+		"movie.mkv.cas(new-id)",
+	}
+	if !reflect.DeepEqual(candidates, wantCandidates) {
+		t.Fatalf("unexpected candidates:\nwant: %#v\ngot:  %#v", wantCandidates, candidates)
+	}
+}

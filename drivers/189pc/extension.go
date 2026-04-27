@@ -56,14 +56,17 @@ var restoreTransferredCASFromInfo = func(ctx context.Context, y *Cloud189PC, dst
 }
 
 var restoreTransferredCASAndLink = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, model.Obj, error) {
+	log.Infof("[%v] resolving transferred .cas file %s(%s)", y.ID, obj.GetName(), obj.GetID())
 	casStream, err := openTransferredCASStream(ctx, y, obj)
 	if err != nil {
+		log.Warnf("[%v] failed to open transferred .cas stream %s(%s): %v", y.ID, obj.GetName(), obj.GetID(), err)
 		return nil, nil, err
 	}
 	defer casStream.Close()
 
 	info, err := readTransferredCASInfo(casStream)
 	if err != nil {
+		log.Warnf("[%v] failed to read transferred .cas metadata %s(%s): %v", y.ID, obj.GetName(), obj.GetID(), err)
 		return nil, nil, err
 	}
 
@@ -85,17 +88,33 @@ var restoreTransferredCASAndLink = func(ctx context.Context, y *Cloud189PC, obj 
 		}
 		forcedDriver.Type = "family"
 	}
+	log.Infof("[%v] restoring transferred .cas %s(%s) into %s(%s) as payload %q", y.ID, obj.GetName(), obj.GetID(), dstDir.GetName(), dstDir.GetID(), info.Name)
 	log.Debugf("restore to %v %v", forcedDriver.Type, y.FamilyID)
 	restoredObj, err := restoreTransferredCASFromInfo(ctx, forcedDriver, dstDir, obj.GetName(), info)
 	if err != nil {
+		log.Warnf("[%v] failed to restore transferred .cas %s(%s): %v", y.ID, obj.GetName(), obj.GetID(), err)
 		return nil, nil, err
 	}
+	log.Infof("[%v] restored transferred .cas to %s(%s)", y.ID, restoredObj.GetName(), restoredObj.GetID())
 	log.Debugf("linkTransferObj: %+v", restoredObj)
 	link, err := linkTransferObj(ctx, forcedDriver, restoredObj)
 	if err != nil {
+		log.Warnf("[%v] failed to link restored transferred object %s(%s): %v", y.ID, restoredObj.GetName(), restoredObj.GetID(), err)
 		return nil, nil, err
 	}
 	return link, restoredObj, nil
+}
+
+func collectTransferredShareCandidates(files []model.Obj, targetName string) (model.Obj, []string) {
+	candidates := make([]string, 0, len(files))
+	var matched model.Obj
+	for _, file := range files {
+		candidates = append(candidates, fmt.Sprintf("%s(%s)", file.GetName(), file.GetID()))
+		if matched == nil && file.GetName() == targetName {
+			matched = file
+		}
+	}
+	return matched, candidates
 }
 
 func cloneDriverForCASRestore(y *Cloud189PC) *Cloud189PC {
@@ -284,11 +303,21 @@ func (y *Cloud189PC) Transfer(ctx context.Context, shareId int, fileId string, f
 	if err != nil && !strings.Contains(err.Error(), "there is a conflict with the target object") {
 		return nil, err
 	}
+	if err != nil {
+		taskID := ""
+		if resp != nil {
+			taskID = resp.TaskID
+		}
+		log.Warnf("[%v] SHARE_SAVE create task conflict for %s(%s) into temp dir %s, task_id=%s: %v", y.ID, fileName, fileId, y.TempDirId, taskID, err)
+	}
 
 	log.Debug("wait task")
 	err = y.WaitBatchTask("SHARE_SAVE", resp.TaskID, time.Second)
 	if err != nil && !strings.Contains(err.Error(), "there is a conflict with the target object") {
 		return nil, err
+	}
+	if err != nil {
+		log.Warnf("[%v] SHARE_SAVE wait conflict for %s(%s) into temp dir %s, task_id=%s: %v", y.ID, fileName, fileId, y.TempDirId, resp.TaskID, err)
 	}
 
 	log.Debug("get files")
@@ -298,20 +327,20 @@ func (y *Cloud189PC) Transfer(ctx context.Context, shareId int, fileId string, f
 	}
 
 	log.Debug("get new file")
-	var transferFile model.Obj
-	for _, file := range files {
-		if file.GetName() == fileName {
-			transferFile = file
-			break
-		}
-	}
+	transferFile, candidates := collectTransferredShareCandidates(files, fileName)
+	log.Infof("[%v] SHARE_SAVE temp dir %s candidates for %s(%s): %s", y.ID, y.TempDirId, fileName, fileId, strings.Join(candidates, ", "))
 
 	if transferFile == nil || transferFile.GetID() == "" {
+		log.Warnf("[%v] SHARE_SAVE did not produce a usable temp object for %s(%s) in temp dir %s", y.ID, fileName, fileId, y.TempDirId)
 		return nil, errors.New("文件转存失败")
 	}
+	log.Infof("[%v] SHARE_SAVE selected temp object %s(%s) for requested file %s(%s)", y.ID, transferFile.GetName(), transferFile.GetID(), fileName, fileId)
 
 	log.Debug("get new file link")
 	link, cleanupTarget, err := y.resolveTransferredShareFile(ctx, transferFile)
+	if err != nil {
+		log.Warnf("[%v] failed to resolve transferred share file %s(%s): %v", y.ID, transferFile.GetName(), transferFile.GetID(), err)
+	}
 
 	if cleanupTarget != nil {
 		driver := y
