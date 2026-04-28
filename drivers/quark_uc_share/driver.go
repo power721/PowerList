@@ -90,30 +90,9 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 
 func (d *QuarkUCShare) link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	if setting.GetBool(conf.UssQuarkTv) {
-		var tvName string
-		if d.config.Name == "UCShare" {
-			tvName = "UCTV"
-		} else {
-			tvName = "QuarkTV"
-		}
-		storage := op.GetFirstDriver(tvName, idx2)
-		idx2++
-		if storage != nil {
-			uc := storage.(*quark_uc_tv.QuarkUCTV)
-			if uc.Cookie != "" {
-				Cookie = uc.Cookie
-				log.Infof("[%v] 获取%s文件直链 %v %v %v", uc.ID, tvName, file.GetName(), file.GetID(), file.GetSize())
-				newFile, err := d.saveTvFile(ctx, uc, file.GetID())
-				if err != nil {
-					return nil, err
-				}
-
-				link, err := d.getTvDownloadUrl(ctx, uc, newFile, args)
-				if link != nil && uc.VideoLinkMethod == "streaming" {
-					link.URL = link.URL + "#proxy=0"
-				}
-				return link, err
-			}
+		link, err := d.getTvLink(ctx, file, args, false)
+		if link != nil {
+			return link, err
 		}
 	}
 
@@ -124,6 +103,13 @@ func (d *QuarkUCShare) link(ctx context.Context, file model.Obj, args model.Link
 		return nil, errors.New(fmt.Sprintf("找不到%s网盘帐号", name))
 	}
 	uc := storage.(*quark.QuarkOrUC)
+	if !uc.VIP {
+		link, err := d.getTvLink(ctx, file, args, true)
+		if link != nil {
+			return link, err
+		}
+	}
+
 	Cookie = uc.Cookie
 	log.Infof("[%v] 获取%s文件直链 %v %v %v", uc.ID, name, file.GetName(), file.GetID(), file.GetSize())
 	newFile, err := d.saveFile(uc, file.GetID())
@@ -133,6 +119,40 @@ func (d *QuarkUCShare) link(ctx context.Context, file model.Obj, args model.Link
 
 	link, err := d.getDownloadUrl(ctx, uc, newFile, args)
 	return link, err
+}
+
+func (d *QuarkUCShare) getTvLink(ctx context.Context, file model.Obj, args model.LinkArgs, forceStream bool) (*model.Link, error) {
+	var tvName string
+	if d.config.Name == "UCShare" {
+		tvName = "UCTV"
+	} else {
+		tvName = "QuarkTV"
+	}
+	storage := op.GetFirstDriver(tvName, idx2)
+	idx2++
+	if storage != nil {
+		uc := storage.(*quark_uc_tv.QuarkUCTV)
+		if uc.Cookie != "" {
+			Cookie = uc.Cookie
+			log.Infof("[%v] 获取%s文件直链 %v %v %v", uc.ID, tvName, file.GetName(), file.GetID(), file.GetSize())
+			newFile, err := d.saveTvFile(ctx, uc, file.GetID())
+			if err != nil {
+				return nil, err
+			}
+
+			videoLinkMethod := uc.Addition.VideoLinkMethod
+			if forceStream {
+				uc.Addition.VideoLinkMethod = "streaming"
+			}
+			link, err := d.getTvDownloadUrl(ctx, uc, newFile, args)
+			uc.Addition.VideoLinkMethod = videoLinkMethod
+			if link != nil && uc.VideoLinkMethod == "streaming" {
+				link.URL = link.URL + "#proxy=0"
+			}
+			return link, err
+		}
+	}
+	return nil, nil
 }
 
 var _ driver.Driver = (*QuarkUCShare)(nil)

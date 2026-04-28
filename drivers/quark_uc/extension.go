@@ -2,15 +2,16 @@ package quark
 
 import (
 	"errors"
+	"net/http"
+	"strings"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
-	"net/http"
-	"strings"
-	"time"
 )
 
 func (d *QuarkOrUC) getVipInfo() {
@@ -30,7 +31,7 @@ func (d *QuarkOrUC) getVipInfo() {
 	}
 	memberType := utils.Json.Get(res, "data", "member_type").ToString()
 	log.Infof("[%d] %s member type: %v", d.ID, d.config.Name, memberType)
-	d.VIP = strings.Contains(memberType, "VIP")
+	d.VIP = strings.Contains(memberType, "SUPER_VIP")
 }
 
 func (d *QuarkOrUC) getTempFolder() {
