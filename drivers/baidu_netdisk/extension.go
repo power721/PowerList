@@ -3,10 +3,11 @@ package baidu_netdisk
 import (
 	"context"
 	"errors"
+	stdpath "path"
+
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
-	stdpath "path"
 )
 
 func (d *BaiduNetdisk) createTempDir() error {
@@ -36,7 +37,7 @@ func (d *BaiduNetdisk) createTempDir() error {
 }
 
 func (d *BaiduNetdisk) cleanTempFile() {
-	if d.TempDirId == "/" {
+	if d.TempDirId == "/" || d.AccessToken == "" {
 		return
 	}
 
