@@ -35,6 +35,7 @@ type DirReq struct {
 type ObjResp struct {
 	Name         string                     `json:"name"`
 	Size         int64                      `json:"size"`
+	Duration     int                        `json:"duration"`
 	IsDir        bool                       `json:"is_dir"`
 	Modified     time.Time                  `json:"modified"`
 	Created      time.Time                  `json:"created"`
@@ -233,6 +234,7 @@ func toObjsResp(objs []model.Obj, parent string, encrypt bool) []ObjResp {
 		resp = append(resp, ObjResp{
 			Name:         obj.GetName(),
 			Size:         obj.GetSize(),
+			Duration:     obj.GetDuration(),
 			IsDir:        obj.IsDir(),
 			Modified:     obj.ModTime(),
 			Created:      obj.CreateTime(),
