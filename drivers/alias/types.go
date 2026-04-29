@@ -49,6 +49,10 @@ func (b BalancedObjs) CreateTime() time.Time {
 	return b[0].CreateTime()
 }
 
+func (b BalancedObjs) GetDuration() int {
+	return b[0].GetDuration()
+}
+
 func (b BalancedObjs) IsDir() bool {
 	return b[0].IsDir()
 }

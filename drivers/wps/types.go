@@ -77,6 +77,10 @@ func (o *Obj) GetSize() int64 {
 	return o.size
 }
 
+func (o *Obj) GetDuration() int {
+	return 0
+}
+
 func (o *Obj) GetName() string {
 	return o.name
 }

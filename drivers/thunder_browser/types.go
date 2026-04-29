@@ -257,6 +257,7 @@ func (c *Files) GetHash() utils.HashInfo {
 }
 
 func (c *Files) GetSize() int64        { size, _ := strconv.ParseInt(c.Size, 10, 64); return size }
+func (c *Files) GetDuration() int      { return 0 }
 func (c *Files) GetName() string       { return c.Name }
 func (c *Files) CreateTime() time.Time { return c.CreatedTime.Time }
 func (c *Files) ModTime() time.Time    { return c.ModifiedTime.Time }

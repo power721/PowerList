@@ -22,6 +22,10 @@ func (f *FileObj) GetHash() utils.HashInfo {
 	return utils.NewHashInfo(utils.SHA1, f.Sha1)
 }
 
+func (f *FileObj) GetDuration() int {
+	return 0
+}
+
 type UploadResult struct {
 	driver.BasicResp
 	Data struct {

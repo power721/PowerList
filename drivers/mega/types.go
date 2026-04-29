@@ -17,6 +17,10 @@ func (m *MegaNode) GetSize() int64 {
 	return m.n.GetSize()
 }
 
+func (m *MegaNode) GetDuration() int {
+	return 0
+}
+
 func (m *MegaNode) GetName() string {
 	return m.n.GetName()
 }

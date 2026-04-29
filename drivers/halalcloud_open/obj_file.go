@@ -29,6 +29,10 @@ func (f *ObjFile) GetSize() int64 {
 	return f.fileSize
 }
 
+func (f *ObjFile) GetDuration() int {
+	return 0
+}
+
 func (f *ObjFile) GetName() string {
 	return f.sdkFile.Name
 }

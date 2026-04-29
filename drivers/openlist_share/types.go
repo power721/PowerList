@@ -51,6 +51,10 @@ func (t *TreeResp) GetSize() int64 {
 	return t.Size
 }
 
+func (t *TreeResp) GetDuration() int {
+	return 0
+}
+
 func (t *TreeResp) GetName() string {
 	return t.Name
 }

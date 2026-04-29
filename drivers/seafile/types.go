@@ -42,6 +42,9 @@ func (l *RepoItemResp) CreateTime() time.Time {
 func (l *RepoItemResp) GetSize() int64 {
 	return l.Size
 }
+func (l *RepoItemResp) GetDuration() int {
+	return 0
+}
 func (l *RepoItemResp) GetID() string {
 	if l.repoID != "" {
 		return l.repoID

@@ -58,6 +58,7 @@ type (
 )
 
 func (c *File) GetSize() int64        { return c.Size }
+func (c *File) GetDuration() int      { return 0 }
 func (c *File) GetName() string       { return getFileName(c.Path) }
 func (c *File) CreateTime() time.Time { return time.Unix(c.Ctime, 0) }
 func (c *File) ModTime() time.Time    { return time.Unix(c.Mtime, 0) }
@@ -115,6 +116,7 @@ func (a *Album) GetHash() utils.HashInfo {
 }
 
 func (a *Album) GetSize() int64        { return 0 }
+func (a *Album) GetDuration() int      { return 0 }
 func (a *Album) GetName() string       { return a.Title }
 func (a *Album) CreateTime() time.Time { return time.Unix(a.CreationTime, 0) }
 func (a *Album) ModTime() time.Time    { return time.Unix(a.Mtime, 0) }

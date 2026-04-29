@@ -83,7 +83,8 @@ func (f *FileOrFolder) GetSize() int64 {
 	}
 	return *f.size
 }
-func (f *FileOrFolder) IsDir() bool { return f.FolID != "" }
+func (f *FileOrFolder) GetDuration() int { return 0 }
+func (f *FileOrFolder) IsDir() bool      { return f.FolID != "" }
 func (f *FileOrFolder) ModTime() time.Time {
 	if f.time == nil {
 		time := MustParseTime(f.Time)
@@ -162,7 +163,8 @@ func (f *FileOrFolderByShareUrl) GetSize() int64 {
 	}
 	return *f.size
 }
-func (f *FileOrFolderByShareUrl) IsDir() bool { return f.IsFloder }
+func (f *FileOrFolderByShareUrl) GetDuration() int { return 0 }
+func (f *FileOrFolderByShareUrl) IsDir() bool      { return f.IsFloder }
 func (f *FileOrFolderByShareUrl) ModTime() time.Time {
 	if f.time == nil {
 		time := MustParseTime(f.Time)

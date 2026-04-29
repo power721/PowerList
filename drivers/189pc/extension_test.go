@@ -28,6 +28,7 @@ type stubFileStreamer struct {
 
 func (s *stubFileStreamer) Read(_ []byte) (int, error) { return 0, errors.New("unexpected read") }
 func (s *stubFileStreamer) GetSize() int64             { return 0 }
+func (s *stubFileStreamer) GetDuration() int           { return 0 }
 func (s *stubFileStreamer) GetName() string            { return s.name }
 func (s *stubFileStreamer) ModTime() time.Time         { return time.Time{} }
 func (s *stubFileStreamer) CreateTime() time.Time      { return time.Time{} }

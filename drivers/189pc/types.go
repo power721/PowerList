@@ -199,6 +199,7 @@ func (c *Cloud189File) GetHash() utils.HashInfo {
 }
 
 func (c *Cloud189File) GetSize() int64     { return c.Size }
+func (c *Cloud189File) GetDuration() int   { return 0 }
 func (c *Cloud189File) GetName() string    { return c.Name }
 func (c *Cloud189File) ModTime() time.Time { return time.Time(c.LastOpTime) }
 func (c *Cloud189File) IsDir() bool        { return false }
@@ -231,6 +232,7 @@ func (c *Cloud189Folder) GetHash() utils.HashInfo {
 }
 
 func (c *Cloud189Folder) GetSize() int64     { return 0 }
+func (c *Cloud189Folder) GetDuration() int   { return 0 }
 func (c *Cloud189Folder) GetName() string    { return c.Name }
 func (c *Cloud189Folder) ModTime() time.Time { return time.Time(c.LastOpTime) }
 func (c *Cloud189Folder) IsDir() bool        { return true }

@@ -3,9 +3,9 @@ package _115_open
 import (
 	"time"
 
+	sdk "github.com/OpenListTeam/115-sdk-go"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
-	sdk "github.com/OpenListTeam/115-sdk-go"
 )
 
 type Obj sdk.GetFilesResp_File
@@ -43,6 +43,11 @@ func (o *Obj) GetPath() string {
 // GetSize implements model.Obj.
 func (o *Obj) GetSize() int64 {
 	return o.FS
+}
+
+// GetDuration implements model.Obj.
+func (o *Obj) GetDuration() int {
+	return 0
 }
 
 // IsDir implements model.Obj.

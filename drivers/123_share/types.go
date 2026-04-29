@@ -35,6 +35,10 @@ func (f File) GetSize() int64 {
 	return f.Size
 }
 
+func (f File) GetDuration() int {
+	return 0
+}
+
 func (f File) GetName() string {
 	return f.FileName
 }
