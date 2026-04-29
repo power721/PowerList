@@ -5,6 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
+	"path"
+	"regexp"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/baidu_netdisk"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
@@ -16,11 +22,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
-	"net/http"
-	"net/url"
-	"path"
-	"regexp"
-	"time"
 )
 
 var idx = 0
@@ -236,7 +237,7 @@ func (d *BaiduShare2) link(ctx context.Context, file model.Obj, args model.LinkA
 		return nil, err
 	}
 
-	go d.delete(ctx, f, bd)
+	go d.delete(f, bd)
 
 	link, err := bd.Link(ctx, f, args)
 	log.Debugf("Baidu link: %v %v %v", f.GetID(), f.GetPath(), link)
@@ -290,7 +291,7 @@ func (d *BaiduShare2) saveFile(fid string, bd *baidu_netdisk.BaiduNetdisk) (mode
 	return file, nil
 }
 
-func (d *BaiduShare2) delete(ctx context.Context, file model.Obj, bd *baidu_netdisk.BaiduNetdisk) {
+func (d *BaiduShare2) delete(file model.Obj, bd *baidu_netdisk.BaiduNetdisk) {
 	delayTime := setting.GetInt(conf.DeleteDelayTime, 900)
 	if delayTime == 0 {
 		return
@@ -302,7 +303,7 @@ func (d *BaiduShare2) delete(ctx context.Context, file model.Obj, bd *baidu_netd
 
 	log.Infof("[%v] Delete Baidu temp file %v after %v seconds.", bd.ID, file.GetID(), delayTime)
 	time.Sleep(time.Duration(delayTime) * time.Second)
-	bd.Remove(ctx, file)
+	bd.Delete(file)
 }
 
 func (d *BaiduShare2) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {

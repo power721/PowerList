@@ -161,6 +161,13 @@ func (d *BaiduNetdisk) postForm(pathname string, params map[string]string, form 
 	}, resp)
 }
 
+func (d *BaiduNetdisk) postForm2(pathname string, params map[string]string, form map[string]string, resp interface{}) ([]byte, error) {
+	return d.request("https://pan.baidu.com"+pathname, http.MethodPost, func(req *resty.Request) {
+		req.SetQueryParams(params)
+		req.SetFormData(form)
+	}, resp)
+}
+
 func (d *BaiduNetdisk) getFiles(dir string) ([]File, error) {
 	start := 0
 	limit := 1000

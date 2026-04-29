@@ -1,14 +1,17 @@
 package baidu_netdisk
 
 import (
-	"context"
 	"errors"
 	stdpath "path"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
 )
+
+var baiduPanBaseURL = "https://pan.baidu.com"
 
 func (d *BaiduNetdisk) createTempDir() error {
 	d.TempDirId = "/"
@@ -37,7 +40,7 @@ func (d *BaiduNetdisk) createTempDir() error {
 }
 
 func (d *BaiduNetdisk) cleanTempFile() {
-	if d.TempDirId == "/" || d.AccessToken == "" {
+	if d.TempDirId == "/" {
 		return
 	}
 
@@ -48,13 +51,30 @@ func (d *BaiduNetdisk) cleanTempFile() {
 
 	for _, file := range files {
 		log.Infof("Delete Baidu temp file: %v %v", file.FsId, file.Path)
-		d.Remove(context.Background(), fileToObj(file))
+		d.Delete(fileToObj(file))
+	}
+}
+
+func (d *BaiduNetdisk) Delete(obj model.Obj) {
+	params := map[string]string{
+		"async":    "2",
+		"onnest":   "fail",
+		"opera":    "delete",
+		"bdstoken": d.Token,
+	}
+	data := []string{obj.GetPath()}
+	marshal, _ := utils.Json.MarshalToString(data)
+	_, err := d.postForm2("/api/filemanager", params, map[string]string{
+		"filelist": marshal,
+	}, nil)
+	if err != nil {
+		log.Warnf("delete file failed: %v", err)
 	}
 }
 
 func (d *BaiduNetdisk) verifyCookie() error {
 	client := resty.New().
-		SetBaseURL("https://pan.baidu.com").
+		SetBaseURL(baiduPanBaseURL).
 		SetHeader("User-Agent", "netdisk").
 		SetHeader("Referer", "https://pan.baidu.com")
 
@@ -89,6 +109,33 @@ func (d *BaiduNetdisk) verifyCookie() error {
 	if d.UK != respJson.Info.UK {
 		return errors.New("cookie and token mismatch")
 	}
+
+	loginStatusResp := struct {
+		LoginInfo struct {
+			BDSToken string `json:"bdstoken"`
+		} `json:"login_info"`
+	}{}
+	_, err = client.R().
+		SetQueryParams(map[string]string{
+			"clienttype": "1",
+			"web":        "1",
+			"channel":    "web",
+			"version":    "0",
+		}).
+		SetHeader("Origin", "https://pan.baidu.com").
+		SetHeader("Referer", "https://pan.baidu.com/").
+		SetHeader("Cookie", d.Cookie).
+		SetResult(&loginStatusResp).
+		Get("/api/loginStatus")
+	if err != nil {
+		log.Warnf("get bdstoken error: %v", err)
+		return err
+	}
+	if loginStatusResp.LoginInfo.BDSToken == "" {
+		return errors.New("empty bdstoken")
+	}
+	d.Token = loginStatusResp.LoginInfo.BDSToken
+
 	log.Debugf("user info: %v", res.String())
 	log.Infof("cookie user info: %v", respJson.Info)
 	return nil

@@ -20,6 +20,7 @@ type Addition struct {
 	ClientSecret          string `json:"client_secret" required:"true" default:"jXiFMOPVPCWlO2M5CwWQzffpNPaGTRBG"`
 	CustomCrackUA         string `json:"custom_crack_ua" required:"true" default:"netdisk"`
 	AccessToken           string `json:"access_token"`
+	Token                 string `json:"bdstoken"`
 	UploadThread          string `json:"upload_thread" default:"3" help:"1<=thread<=32"`
 	UploadSliceTimeout    int    `json:"upload_timeout" type:"number" default:"60" help:"per-slice upload timeout in seconds"`
 	UploadAPI             string `json:"upload_api" default:"https://d.pcs.baidu.com"`
