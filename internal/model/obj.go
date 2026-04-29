@@ -21,6 +21,7 @@ type ObjUnwrap interface {
 
 type Obj interface {
 	GetSize() int64
+	GetDuration() int
 	GetName() string
 	ModTime() time.Time
 	CreateTime() time.Time

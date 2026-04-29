@@ -24,6 +24,7 @@ type Object struct {
 	Path     string
 	Name     string
 	Size     int64
+	Duration int
 	Modified time.Time
 	Ctime    time.Time // file create time
 	IsFolder bool
@@ -37,6 +38,10 @@ func (o *Object) GetName() string {
 
 func (o *Object) GetSize() int64 {
 	return o.Size
+}
+
+func (o *Object) GetDuration() int {
+	return o.Duration
 }
 
 func (o *Object) ModTime() time.Time {

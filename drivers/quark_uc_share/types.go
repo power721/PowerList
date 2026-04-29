@@ -1,9 +1,9 @@
 package quark_uc_share
 
 import (
-	"github.com/OpenListTeam/OpenList/v4/internal/model"
-	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/internal/model"
 )
 
 type Resp struct {
@@ -91,6 +91,7 @@ type File struct {
 	PID       string `json:"pdir_fid"`
 	Name      string `json:"file_name"`
 	Type      int    `json:"file_type"`
+	Duration  int    `json:"duration"`
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
 	Size      int64  `json:"size"`
@@ -102,6 +103,7 @@ func fileToObj(f File) *model.ObjThumb {
 			ID:       f.ID + "-" + f.FID + "-" + f.PID,
 			Name:     f.Name,
 			Size:     f.Size,
+			Duration: f.Duration,
 			Modified: time.UnixMilli(f.UpdatedAt),
 			IsFolder: f.Type == 0,
 		},
@@ -120,60 +122,4 @@ type SortResp struct {
 		Total int    `json:"_total"`
 		Way   string `json:"way"`
 	} `json:"metadata"`
-}
-
-type Request struct {
-}
-
-type MyFile struct {
-	FileId   string    `json:"file_id"`
-	Name     string    `json:"name"`
-	Size     int64     `json:"size"`
-	UpdateAt time.Time `json:"UpdateAt"`
-}
-
-type VideoPreviewResponse struct {
-	PlayInfo VideoPreviewPlayInfo `json:"video_preview_play_info"`
-}
-
-type VideoPreviewPlayInfo struct {
-	Videos []LiveTranscoding `json:"live_transcoding_task_list"`
-}
-
-type LiveTranscoding struct {
-	TemplateId string `json:"template_id"`
-	Status     string `json:"status"`
-	Url        string `json:"url"`
-}
-
-func (f MyFile) CreateTime() time.Time {
-	return f.UpdateAt
-}
-
-func (f MyFile) GetHash() utils.HashInfo {
-	return utils.HashInfo{}
-}
-
-func (f MyFile) GetPath() string {
-	return ""
-}
-
-func (f MyFile) GetSize() int64 {
-	return f.Size
-}
-
-func (f MyFile) GetName() string {
-	return f.Name
-}
-
-func (f MyFile) ModTime() time.Time {
-	return f.UpdateAt
-}
-
-func (f MyFile) IsDir() bool {
-	return false
-}
-
-func (f MyFile) GetID() string {
-	return f.FileId
 }

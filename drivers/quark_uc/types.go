@@ -34,7 +34,7 @@ type File struct {
 	// IncludeItems int    `json:"include_items,omitempty"`
 	// RiskType     int    `json:"risk_type"`
 	// BackupSign   int    `json:"backup_sign"`
-	// Duration     int    `json:"duration"`
+	Duration int `json:"duration"`
 	// FileSource   string `json:"file_source"`
 	File      bool  `json:"file"`
 	CreatedAt int64 `json:"created_at"`
@@ -44,19 +44,12 @@ type File struct {
 	// Thumbnail string `json:"thumbnail,omitempty"`
 }
 
-func fileToObj(f File) *model.Object {
-	return &model.Object{
-		ID:       f.Fid,
-		Name:     f.FileName,
-		Size:     f.Size,
-		Modified: time.UnixMilli(f.UpdatedAt),
-		Ctime:    time.UnixMilli(f.CreatedAt),
-		IsFolder: !f.File,
-	}
-}
-
 func (f *File) GetSize() int64 {
 	return f.Size
+}
+
+func (f *File) GetDuration() int {
+	return f.Duration
 }
 
 func (f *File) GetName() string {

@@ -14,6 +14,7 @@ var idx = 0
 
 type FileObj struct {
 	Size     int64
+	Duration int
 	Sha1     string
 	Utm      time.Time
 	FileName string
@@ -31,6 +32,10 @@ func (f *FileObj) GetHash() utils.HashInfo {
 
 func (f *FileObj) GetSize() int64 {
 	return f.Size
+}
+
+func (f *FileObj) GetDuration() int {
+	return f.Duration
 }
 
 func (f *FileObj) GetName() string {
@@ -68,6 +73,7 @@ func transFunc(sf driver115.ShareFile) (model.Obj, error) {
 	}
 	return &FileObj{
 		Size:     int64(sf.Size),
+		Duration: sf.Duration,
 		Sha1:     sf.Sha1,
 		Utm:      utm,
 		FileName: string(sf.FileName),
