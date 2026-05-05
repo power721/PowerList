@@ -14,6 +14,8 @@ RUN addgroup -g ${GID} ${USER} && \
     adduser -D -u ${UID} -G ${USER} ${USER} && \
     mkdir -p /opt/alist/data
 
+RUN apk add --no-cache tzdata
+
 COPY --chmod=755 --chown=${UID}:${GID} /build/${TARGETPLATFORM}/alist ./
 COPY --chmod=755 --chown=${UID}:${GID} entrypoint.sh /entrypoint.sh
 
