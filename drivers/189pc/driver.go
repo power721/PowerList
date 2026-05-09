@@ -178,6 +178,14 @@ func (y *Cloud189PC) List(ctx context.Context, dir model.Obj, args model.ListArg
 }
 
 func (y *Cloud189PC) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	if strings.HasSuffix(strings.ToLower(file.GetName()), ".cas") {
+		link, cleanupTarget, err := y.resolveExistingCASFile(ctx, file)
+		if err != nil {
+			return nil, err
+		}
+		scheduleResolvedTempCleanup(ctx, y, cleanupTarget)
+		return link, nil
+	}
 	return y.directLink(ctx, file)
 }
 

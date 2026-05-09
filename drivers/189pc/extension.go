@@ -18,6 +18,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/casfile"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	"github.com/OpenListTeam/OpenList/v4/internal/stream"
@@ -46,6 +47,14 @@ var clearRecycleAfterRemove = func(ctx context.Context, y *Cloud189PC, obj model
 
 var getDeleteDelaySeconds = func() int {
 	return setting.GetInt(conf.DeleteDelayTime, 900)
+}
+
+var findResolvedCASFileByName = func(ctx context.Context, y *Cloud189PC, name string, folderID string) (model.Obj, error) {
+	return y.findFileByName(ctx, name, folderID, y.isFamily())
+}
+
+var scheduleResolvedTempCleanup = func(ctx context.Context, y *Cloud189PC, obj model.Obj) {
+	y.scheduleDelayedResolvedTempCleanup(ctx, obj)
 }
 
 var openTransferredCASStream = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (model.FileStreamer, error) {
@@ -166,6 +175,63 @@ func (y *Cloud189PC) resolveTransferredShareFile(ctx context.Context, transferFi
 		return nil, nil, err
 	}
 	return link, transferFile, nil
+}
+
+func (y *Cloud189PC) casRestoreTempDir() model.Obj {
+	if y.FamilyID != "" && y.familyTransferFolder != nil {
+		return &model.Object{
+			ID:       y.familyTransferFolder.GetID(),
+			Name:     y.familyTransferFolder.GetName(),
+			IsFolder: true,
+		}
+	}
+	return &model.Object{
+		ID:       y.TempDirId,
+		Name:     conf.TempDirName,
+		IsFolder: true,
+	}
+}
+
+func (y *Cloud189PC) resolveExistingCASFile(ctx context.Context, casFile model.Obj) (*model.Link, model.Obj, error) {
+	casStream, err := openTransferredCASStream(ctx, y, casFile)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer casStream.Close()
+
+	info, err := readTransferredCASInfo(casStream)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	forcedDriver := cloneDriverForCASRestore(y)
+	forcedDriver.RestoreSourceUseCurrentName = false
+	if y.FamilyID != "" {
+		forcedDriver.Type = "family"
+	}
+
+	dstDir := forcedDriver.casRestoreTempDir()
+	restoredName, err := forcedDriver.resolveRestoreSourceName(casFile.GetName(), info)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	resolvedObj, err := findResolvedCASFileByName(ctx, forcedDriver, restoredName, dstDir.GetID())
+	if err != nil {
+		if !errs.IsObjectNotFound(err) {
+			return nil, nil, err
+		}
+		resolvedObj, err = restoreTransferredCASFromInfo(ctx, forcedDriver, dstDir, casFile.GetName(), info)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	link, err := directLinkObj(ctx, forcedDriver, resolvedObj)
+	if err != nil {
+		return nil, nil, err
+	}
+	return link, resolvedObj, nil
 }
 
 func (y *Cloud189PC) scheduleDelayedResolvedTempCleanup(ctx context.Context, cleanupTarget model.Obj) {
@@ -391,7 +457,7 @@ func (y *Cloud189PC) Transfer(ctx context.Context, shareId int, fileId string, f
 			driver.Type = "family"
 		}
 		log.Infof("[%v] Delete 189 temp file %v after %v seconds.", driver.ID, cleanupTarget.GetID(), getDeleteDelaySeconds())
-		driver.scheduleDelayedResolvedTempCleanup(ctx, cleanupTarget)
+		scheduleResolvedTempCleanup(ctx, driver, cleanupTarget)
 	}
 
 	return link, err

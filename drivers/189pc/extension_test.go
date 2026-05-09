@@ -12,6 +12,7 @@ import (
 
 	"github.com/OpenListTeam/OpenList/v4/internal/casfile"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
+	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/OpenListTeam/OpenList/v4/pkg/http_range"
@@ -221,6 +222,168 @@ func TestResolveTransferredShareFile_CASRestoreFailureReturnsErrorAndDoesNotFall
 	}
 	if linkCalls != 0 {
 		t.Fatalf("expected no fallback link call, got %d", linkCalls)
+	}
+}
+
+func TestResolveExistingCASFile_RestoresThenLinks(t *testing.T) {
+	driver := &Cloud189PC{TempDirId: "temp-dir-id"}
+	casObj := &Cloud189File{Name: "movie.mkv.cas"}
+	restoredObj := &Cloud189File{ID: "restored-id", Name: "payload.mkv"}
+
+	openCalls := 0
+	readCalls := 0
+	restoreCalls := 0
+	linkCalls := 0
+
+	linkSeamMu.Lock()
+	origOpen := openTransferredCASStream
+	origRead := readTransferredCASInfo
+	origFind := findResolvedCASFileByName
+	origRestore := restoreTransferredCASFromInfo
+	origLink := directLinkObj
+	openTransferredCASStream = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (model.FileStreamer, error) {
+		openCalls++
+		return &stubFileStreamer{name: obj.GetName()}, nil
+	}
+	readTransferredCASInfo = func(stream model.FileStreamer) (*casfile.Info, error) {
+		readCalls++
+		return &casfile.Info{Name: "payload.mkv", Size: 7, MD5: "abc", SliceMD5: "def"}, nil
+	}
+	findResolvedCASFileByName = func(ctx context.Context, y *Cloud189PC, name string, folderID string) (model.Obj, error) {
+		return nil, errs.ObjectNotFound
+	}
+	restoreTransferredCASFromInfo = func(ctx context.Context, y *Cloud189PC, dstDir model.Obj, casFileName string, info *casfile.Info) (model.Obj, error) {
+		restoreCalls++
+		if y.RestoreSourceUseCurrentName {
+			t.Fatal("expected RestoreSourceUseCurrentName forced false")
+		}
+		if dstDir.GetID() != driver.TempDirId {
+			t.Fatalf("expected temp dir id %q, got %q", driver.TempDirId, dstDir.GetID())
+		}
+		return restoredObj, nil
+	}
+	directLinkObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
+		linkCalls++
+		return &model.Link{URL: "https://example.com/" + obj.GetName()}, nil
+	}
+	t.Cleanup(func() {
+		openTransferredCASStream = origOpen
+		readTransferredCASInfo = origRead
+		findResolvedCASFileByName = origFind
+		restoreTransferredCASFromInfo = origRestore
+		directLinkObj = origLink
+		linkSeamMu.Unlock()
+	})
+
+	link, cleanupObj, err := driver.resolveExistingCASFile(context.Background(), casObj)
+	if err != nil {
+		t.Fatalf("resolve existing cas: %v", err)
+	}
+	if link.URL != "https://example.com/payload.mkv" {
+		t.Fatalf("expected restored payload link, got %q", link.URL)
+	}
+	if cleanupObj != restoredObj {
+		t.Fatalf("expected restored object as cleanup target, got %#v", cleanupObj)
+	}
+	if openCalls != 1 || readCalls != 1 || restoreCalls != 1 || linkCalls != 1 {
+		t.Fatalf("unexpected call counts: open=%d read=%d restore=%d link=%d", openCalls, readCalls, restoreCalls, linkCalls)
+	}
+}
+
+func TestResolveExistingCASFile_ReusesExistingPayloadFile(t *testing.T) {
+	driver := &Cloud189PC{TempDirId: "temp-dir-id"}
+	casObj := &Cloud189File{Name: "movie.mkv.cas"}
+	existingObj := &Cloud189File{ID: "existing-id", Name: "payload.mkv"}
+
+	linkSeamMu.Lock()
+	origOpen := openTransferredCASStream
+	origRead := readTransferredCASInfo
+	origFind := findResolvedCASFileByName
+	origRestore := restoreTransferredCASFromInfo
+	origLink := directLinkObj
+	openTransferredCASStream = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (model.FileStreamer, error) {
+		return &stubFileStreamer{name: obj.GetName()}, nil
+	}
+	readTransferredCASInfo = func(stream model.FileStreamer) (*casfile.Info, error) {
+		return &casfile.Info{Name: "payload.mkv", Size: 7, MD5: "abc", SliceMD5: "def"}, nil
+	}
+	findResolvedCASFileByName = func(ctx context.Context, y *Cloud189PC, name string, folderID string) (model.Obj, error) {
+		return existingObj, nil
+	}
+	restoreTransferredCASFromInfo = func(ctx context.Context, y *Cloud189PC, dstDir model.Obj, casFileName string, info *casfile.Info) (model.Obj, error) {
+		t.Fatal("did not expect restore when payload file already exists")
+		return nil, nil
+	}
+	directLinkObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
+		return &model.Link{URL: "https://example.com/" + obj.GetName()}, nil
+	}
+	t.Cleanup(func() {
+		openTransferredCASStream = origOpen
+		readTransferredCASInfo = origRead
+		findResolvedCASFileByName = origFind
+		restoreTransferredCASFromInfo = origRestore
+		directLinkObj = origLink
+		linkSeamMu.Unlock()
+	})
+
+	link, cleanupObj, err := driver.resolveExistingCASFile(context.Background(), casObj)
+	if err != nil {
+		t.Fatalf("resolve existing cas with reuse: %v", err)
+	}
+	if link.URL != "https://example.com/payload.mkv" {
+		t.Fatalf("expected reused payload link, got %q", link.URL)
+	}
+	if cleanupObj != existingObj {
+		t.Fatalf("expected existing object as cleanup target, got %#v", cleanupObj)
+	}
+}
+
+func TestResolveExistingCASFile_RestoreFailureDoesNotFallback(t *testing.T) {
+	driver := &Cloud189PC{TempDirId: "temp-dir-id"}
+	casObj := &Cloud189File{Name: "movie.mkv.cas"}
+
+	linkCalls := 0
+
+	linkSeamMu.Lock()
+	origOpen := openTransferredCASStream
+	origRead := readTransferredCASInfo
+	origFind := findResolvedCASFileByName
+	origRestore := restoreTransferredCASFromInfo
+	origLink := directLinkObj
+	openTransferredCASStream = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (model.FileStreamer, error) {
+		return &stubFileStreamer{name: obj.GetName()}, nil
+	}
+	readTransferredCASInfo = func(stream model.FileStreamer) (*casfile.Info, error) {
+		return &casfile.Info{Name: "payload.mkv", Size: 7, MD5: "abc", SliceMD5: "def"}, nil
+	}
+	findResolvedCASFileByName = func(ctx context.Context, y *Cloud189PC, name string, folderID string) (model.Obj, error) {
+		return nil, errs.ObjectNotFound
+	}
+	restoreTransferredCASFromInfo = func(ctx context.Context, y *Cloud189PC, dstDir model.Obj, casFileName string, info *casfile.Info) (model.Obj, error) {
+		return nil, errors.New("restore failed")
+	}
+	directLinkObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
+		linkCalls++
+		return &model.Link{URL: "https://example.com/" + obj.GetName()}, nil
+	}
+	t.Cleanup(func() {
+		openTransferredCASStream = origOpen
+		readTransferredCASInfo = origRead
+		findResolvedCASFileByName = origFind
+		restoreTransferredCASFromInfo = origRestore
+		directLinkObj = origLink
+		linkSeamMu.Unlock()
+	})
+
+	link, cleanupObj, err := driver.resolveExistingCASFile(context.Background(), casObj)
+	if err == nil || err.Error() != "restore failed" {
+		t.Fatalf("expected restore failed error, got %v", err)
+	}
+	if link != nil || cleanupObj != nil {
+		t.Fatalf("expected nil link and cleanup target on restore failure, got link=%#v cleanup=%#v", link, cleanupObj)
+	}
+	if linkCalls != 0 {
+		t.Fatalf("expected no fallback direct link call, got %d", linkCalls)
 	}
 }
 
