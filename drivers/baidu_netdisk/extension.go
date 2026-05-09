@@ -2,6 +2,7 @@ package baidu_netdisk
 
 import (
 	"errors"
+	"net/http"
 	stdpath "path"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -15,8 +16,7 @@ var baiduPanBaseURL = "https://pan.baidu.com"
 
 func (d *BaiduNetdisk) createTempDir() error {
 	d.TempDirId = "/"
-	var newDir File
-	_, err := d.create(stdpath.Join("/", conf.TempDirName), 0, 1, "", "", &newDir, 0, 0)
+	err := d.createDirectory(stdpath.Join("/", conf.TempDirName), true)
 	if err != nil {
 		log.Warnf("create temp dir failed: %v", err)
 	}
@@ -37,6 +37,32 @@ func (d *BaiduNetdisk) createTempDir() error {
 
 	d.cleanTempFile()
 	return nil
+}
+
+func (d *BaiduNetdisk) createDirectory(path string, isDir bool) error {
+	params := map[string]string{
+		"a":          "commit",
+		"bdstoken":   d.Token,
+		"app_id":     "250528",
+		"clienttype": "0",
+		"web":        "1",
+	}
+	form := map[string]string{
+		"path":       path,
+		"isdir":      "0",
+		"block_list": "[]",
+	}
+	if isDir {
+		form["isdir"] = "1"
+	}
+	_, err := d.request("https://pan.baidu.com/api/create", http.MethodPost, func(req *resty.Request) {
+		req.SetQueryParams(params)
+		req.SetHeader("Origin", baiduPanBaseURL)
+		req.SetHeader("Referer", baiduPanBaseURL+"/disk/main")
+		req.SetHeader("X-Requested-With", "XMLHttpRequest")
+		req.SetFormData(form)
+	}, nil)
+	return err
 }
 
 func (d *BaiduNetdisk) cleanTempFile() {

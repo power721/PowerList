@@ -103,12 +103,24 @@ func (d *BaiduNetdisk) Link(ctx context.Context, file model.Obj, args model.Link
 }
 
 func (d *BaiduNetdisk) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) (model.Obj, error) {
-	var newDir File
-	_, err := d.create(stdpath.Join(parentDir.GetPath(), dirName), 0, 1, "", "", &newDir, 0, 0)
+	path := stdpath.Join(parentDir.GetPath(), dirName)
+	if err := d.createDirectory(path, true); err != nil {
+		return nil, err
+	}
+	files, err := d.getFiles(parentDir.GetPath())
 	if err != nil {
 		return nil, err
 	}
-	return fileToObj(newDir), nil
+	for _, file := range files {
+		if file.Path == path || file.ServerFilename == dirName {
+			return fileToObj(file), nil
+		}
+	}
+	return &model.Object{
+		Path:     path,
+		Name:     dirName,
+		IsFolder: true,
+	}, nil
 }
 
 func (d *BaiduNetdisk) Move(ctx context.Context, srcObj, dstDir model.Obj) (model.Obj, error) {
