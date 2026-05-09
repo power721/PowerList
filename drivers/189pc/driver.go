@@ -38,11 +38,11 @@ type Cloud189PC struct {
 	familyTransferFolder    *Cloud189Folder
 	cleanFamilyTransferFile func()
 
-	storageConfig driver.Config
-	ref           *Cloud189PC
-	TempDirId     string
-	cron          *cron.Cron
-	client2       *resty.Client
+	storageConfig       driver.Config
+	ref                 *Cloud189PC
+	TempDirId           string
+	cron                *cron.Cron
+	client2             *resty.Client
 	autoRestoreInFlight sync.Map
 }
 
@@ -178,6 +178,10 @@ func (y *Cloud189PC) List(ctx context.Context, dir model.Obj, args model.ListArg
 }
 
 func (y *Cloud189PC) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	return y.directLink(ctx, file)
+}
+
+func (y *Cloud189PC) directLink(ctx context.Context, file model.Obj) (*model.Link, error) {
 	var downloadUrl struct {
 		URL string `json:"fileDownloadUrl"`
 	}

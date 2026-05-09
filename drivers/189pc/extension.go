@@ -27,12 +27,29 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var linkTransferObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
-	return y.Link(ctx, obj, model.LinkArgs{})
+var directLinkObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
+	return y.directLink(ctx, obj)
+}
+
+var removeResolvedTempObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) error {
+	return y.Remove(ctx, obj)
+}
+
+var clearRecycleAfterRemove = func(ctx context.Context, y *Cloud189PC, obj model.Obj) error {
+	_, err := y.CreateBatchTask("CLEAR_RECYCLE", y.FamilyID, "", nil, BatchTaskInfo{
+		FileId:   obj.GetID(),
+		FileName: obj.GetName(),
+		IsFolder: 0,
+	})
+	return err
+}
+
+var getDeleteDelaySeconds = func() int {
+	return setting.GetInt(conf.DeleteDelayTime, 900)
 }
 
 var openTransferredCASStream = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (model.FileStreamer, error) {
-	link, err := y.Link(ctx, obj, model.LinkArgs{})
+	link, err := directLinkObj(ctx, y, obj)
 	if err != nil {
 		return nil, err
 	}
@@ -96,8 +113,8 @@ var restoreTransferredCASAndLink = func(ctx context.Context, y *Cloud189PC, obj 
 		return nil, nil, err
 	}
 	log.Infof("[%v] restored transferred .cas to %s(%s)", y.ID, restoredObj.GetName(), restoredObj.GetID())
-	log.Debugf("linkTransferObj: %+v", restoredObj)
-	link, err := linkTransferObj(ctx, forcedDriver, restoredObj)
+	log.Debugf("directLinkObj: %+v", restoredObj)
+	link, err := directLinkObj(ctx, forcedDriver, restoredObj)
 	if err != nil {
 		log.Warnf("[%v] failed to link restored transferred object %s(%s): %v", y.ID, restoredObj.GetName(), restoredObj.GetID(), err)
 		return nil, nil, err
@@ -144,11 +161,36 @@ func (y *Cloud189PC) resolveTransferredShareFile(ctx context.Context, transferFi
 	if strings.HasSuffix(strings.ToLower(transferFile.GetName()), ".cas") {
 		return restoreTransferredCASAndLink(ctx, y, transferFile)
 	}
-	link, err := linkTransferObj(ctx, y, transferFile)
+	link, err := directLinkObj(ctx, y, transferFile)
 	if err != nil {
 		return nil, nil, err
 	}
 	return link, transferFile, nil
+}
+
+func (y *Cloud189PC) scheduleDelayedResolvedTempCleanup(ctx context.Context, cleanupTarget model.Obj) {
+	delaySeconds := getDeleteDelaySeconds()
+	if delaySeconds == 0 || cleanupTarget == nil {
+		return
+	}
+	go func() {
+		time.Sleep(time.Duration(delaySeconds) * time.Second)
+
+		cleanupName := cleanupTarget.GetName()
+		cleanupID := cleanupTarget.GetID()
+		log.Infof("[%v] Delete 189 temp file: %v %v", y.ID, cleanupID, cleanupName)
+		removeErr := removeResolvedTempObj(ctx, y, cleanupTarget)
+		if removeErr != nil {
+			log.Infof("[%v] 天翼云盘删除文件:%s失败: %v", y.ID, cleanupName, removeErr)
+			return
+		}
+		log.Debugf("[%v] 已删除天翼云盘下的文件: %v", y.ID, cleanupName)
+		if removeErr = clearRecycleAfterRemove(ctx, y, cleanupTarget); removeErr != nil {
+			log.Infof("[%v] 天翼云盘清除回收站失败: %v", y.ID, removeErr)
+		} else {
+			log.Debugf("[%v] 天翼云盘清除回收站完成", y.ID)
+		}
+	}()
 }
 
 func (y *Cloud189PC) createFamilyTempDir() error {
@@ -348,35 +390,8 @@ func (y *Cloud189PC) Transfer(ctx context.Context, shareId int, fileId string, f
 			driver = cloneDriverForCASRestore(y)
 			driver.Type = "family"
 		}
-		go func() {
-			delayTime := setting.GetInt(conf.DeleteDelayTime, 900)
-			if delayTime == 0 {
-				return
-			}
-
-			cleanupName := cleanupTarget.GetName()
-			cleanupID := cleanupTarget.GetID()
-			log.Infof("[%v] Delete 189 temp file %v after %v seconds.", driver.ID, cleanupID, delayTime)
-			time.Sleep(time.Duration(delayTime) * time.Second)
-
-			log.Infof("[%v] Delete 189 temp file: %v %v", driver.ID, cleanupID, cleanupName)
-			removeErr := driver.Remove(ctx, cleanupTarget)
-			if removeErr != nil {
-				log.Infof("[%v] 天翼云盘删除文件:%s失败: %v", driver.ID, cleanupName, removeErr)
-				return
-			}
-			log.Debugf("[%v] 已删除天翼云盘下的文件: %v", driver.ID, cleanupName)
-			_, removeErr = driver.CreateBatchTask("CLEAR_RECYCLE", driver.FamilyID, "", nil, BatchTaskInfo{
-				FileId:   cleanupID,
-				FileName: cleanupName,
-				IsFolder: 0,
-			})
-			if removeErr != nil {
-				log.Infof("[%v] 天翼云盘清除回收站失败: %v", driver.ID, removeErr)
-			} else {
-				log.Debugf("[%v] 天翼云盘清除回收站完成", driver.ID)
-			}
-		}()
+		log.Infof("[%v] Delete 189 temp file %v after %v seconds.", driver.ID, cleanupTarget.GetID(), getDeleteDelaySeconds())
+		driver.scheduleDelayedResolvedTempCleanup(ctx, cleanupTarget)
 	}
 
 	return link, err

@@ -49,6 +49,33 @@ func (s *stubFileStreamer) CacheFullAndWriter(*model.UpdateProgress, io.Writer) 
 }
 func (s *stubFileStreamer) GetFile() model.File { return nil }
 
+func TestScheduleDelayedCleanup_ZeroDelaySkipsRemove(t *testing.T) {
+	driver := &Cloud189PC{Storage: model.Storage{ID: 189}}
+	target := &Cloud189File{ID: "cleanup-id", Name: "payload.mkv"}
+
+	removeCalls := 0
+
+	linkSeamMu.Lock()
+	origRemove := removeResolvedTempObj
+	origDeleteDelay := getDeleteDelaySeconds
+	removeResolvedTempObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) error {
+		removeCalls++
+		return nil
+	}
+	getDeleteDelaySeconds = func() int { return 0 }
+	t.Cleanup(func() {
+		removeResolvedTempObj = origRemove
+		getDeleteDelaySeconds = origDeleteDelay
+		linkSeamMu.Unlock()
+	})
+
+	driver.scheduleDelayedResolvedTempCleanup(context.Background(), target)
+
+	if removeCalls != 0 {
+		t.Fatalf("expected no cleanup when delete delay is zero, got %d", removeCalls)
+	}
+}
+
 func TestResolveTransferredShareFile_NonCASUsesDirectLinkSeam(t *testing.T) {
 	driver := &Cloud189PC{}
 	nonCAS := &Cloud189File{Name: "movie.mkv"}
@@ -56,13 +83,13 @@ func TestResolveTransferredShareFile_NonCASUsesDirectLinkSeam(t *testing.T) {
 	directCalls := 0
 
 	linkSeamMu.Lock()
-	origLink := linkTransferObj
-	linkTransferObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
+	origLink := directLinkObj
+	directLinkObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
 		directCalls++
 		return &model.Link{URL: "https://example.com/direct"}, nil
 	}
 	t.Cleanup(func() {
-		linkTransferObj = origLink
+		directLinkObj = origLink
 		linkSeamMu.Unlock()
 	})
 
@@ -98,7 +125,7 @@ func TestResolveTransferredShareFile_CASRestoresPayloadNameEvenWhenDriverUsesCur
 	origOpen := openTransferredCASStream
 	origRead := readTransferredCASInfo
 	origRestore := restoreTransferredCASFromInfo
-	origLink := linkTransferObj
+	origLink := directLinkObj
 	openTransferredCASStream = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (model.FileStreamer, error) {
 		openCalls++
 		return &stubFileStreamer{name: obj.GetName()}, nil
@@ -123,7 +150,7 @@ func TestResolveTransferredShareFile_CASRestoresPayloadNameEvenWhenDriverUsesCur
 		}
 		return restoredObj, nil
 	}
-	linkTransferObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
+	directLinkObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
 		linkCalls++
 		return &model.Link{URL: "https://example.com/" + obj.GetName()}, nil
 	}
@@ -131,7 +158,7 @@ func TestResolveTransferredShareFile_CASRestoresPayloadNameEvenWhenDriverUsesCur
 		openTransferredCASStream = origOpen
 		readTransferredCASInfo = origRead
 		restoreTransferredCASFromInfo = origRestore
-		linkTransferObj = origLink
+		directLinkObj = origLink
 		linkSeamMu.Unlock()
 	})
 
@@ -160,7 +187,7 @@ func TestResolveTransferredShareFile_CASRestoreFailureReturnsErrorAndDoesNotFall
 	origOpen := openTransferredCASStream
 	origRead := readTransferredCASInfo
 	origRestore := restoreTransferredCASFromInfo
-	origLink := linkTransferObj
+	origLink := directLinkObj
 	openTransferredCASStream = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (model.FileStreamer, error) {
 		return &stubFileStreamer{name: obj.GetName()}, nil
 	}
@@ -170,7 +197,7 @@ func TestResolveTransferredShareFile_CASRestoreFailureReturnsErrorAndDoesNotFall
 	restoreTransferredCASFromInfo = func(ctx context.Context, y *Cloud189PC, dstDir model.Obj, casFileName string, info *casfile.Info) (model.Obj, error) {
 		return nil, errors.New("restore failed")
 	}
-	linkTransferObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
+	directLinkObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
 		linkCalls++
 		return &model.Link{URL: "https://example.com/" + obj.GetName()}, nil
 	}
@@ -178,7 +205,7 @@ func TestResolveTransferredShareFile_CASRestoreFailureReturnsErrorAndDoesNotFall
 		openTransferredCASStream = origOpen
 		readTransferredCASInfo = origRead
 		restoreTransferredCASFromInfo = origRestore
-		linkTransferObj = origLink
+		directLinkObj = origLink
 		linkSeamMu.Unlock()
 	})
 
