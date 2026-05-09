@@ -3,8 +3,12 @@ package _189_share
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"time"
+
 	_189pc "github.com/OpenListTeam/OpenList/v4/drivers/189pc"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
+	"github.com/OpenListTeam/OpenList/v4/internal/cache"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -12,13 +16,26 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
-	"path/filepath"
 )
 
 type Cloud189Share struct {
 	model.Storage
 	Addition
 	client *resty.Client
+}
+
+var cloud189ShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
+
+var resolveCloud189ShareLink = func(ctx context.Context, d *Cloud189Share, file model.Obj) (*model.Link, error) {
+	count := op.GetDriverCount("189CloudPC")
+	var err error
+	for i := 0; i < count; i++ {
+		link, err := d.link(ctx, file)
+		if err == nil {
+			return link, nil
+		}
+	}
+	return nil, err
 }
 
 func (d *Cloud189Share) Config() driver.Config {
@@ -68,14 +85,16 @@ func (d *Cloud189Share) Link(ctx context.Context, file model.Obj, args model.Lin
 		return nil, errors.New("文件格式错误")
 	}
 
-	count := op.GetDriverCount("189CloudPC")
-	for i := 0; i < count; i++ {
-		link, err := d.link(ctx, file)
-		if err == nil {
-			return link, nil
-		}
+	key := file.GetID()
+	if link, ok := cloud189ShareLinkCache.Get(key); ok {
+		return link, nil
 	}
-	return nil, err
+
+	link, err := resolveCloud189ShareLink(ctx, d, file)
+	if err == nil && link != nil {
+		cloud189ShareLinkCache.Set(key, link)
+	}
+	return link, err
 }
 
 func (d *Cloud189Share) link(ctx context.Context, file model.Obj) (*model.Link, error) {

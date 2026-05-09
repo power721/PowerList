@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	quark "github.com/OpenListTeam/OpenList/v4/drivers/quark_uc"
 	"github.com/OpenListTeam/OpenList/v4/drivers/quark_uc_tv"
+	"github.com/OpenListTeam/OpenList/v4/internal/cache"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -22,6 +24,21 @@ type QuarkUCShare struct {
 	Addition
 	config driver.Config
 	conf   Conf
+}
+
+var quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
+
+var resolveQuarkUCShareLink = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	name := d.getDriverName()
+	count := op.GetDriverCount(name)
+	var err error
+	for i := 0; i < count; i++ {
+		link, err := d.link(ctx, file, args)
+		if err == nil {
+			return link, nil
+		}
+	}
+	return nil, err
 }
 
 func (d *QuarkUCShare) Config() driver.Config {
@@ -76,16 +93,16 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 		}
 	}
 
-	name := d.getDriverName()
-	count := op.GetDriverCount(name)
-	var err error
-	for i := 0; i < count; i++ {
-		link, err := d.link(ctx, file, args)
-		if err == nil {
-			return link, nil
-		}
+	key := file.GetID()
+	if link, ok := quarkUCShareLinkCache.Get(key); ok {
+		return link, nil
 	}
-	return nil, err
+
+	link, err := resolveQuarkUCShareLink(ctx, d, file, args)
+	if err == nil && link != nil {
+		quarkUCShareLinkCache.Set(key, link)
+	}
+	return link, err
 }
 
 func (d *QuarkUCShare) link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
