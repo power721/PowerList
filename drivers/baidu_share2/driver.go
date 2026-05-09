@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/baidu_netdisk"
+	"github.com/OpenListTeam/OpenList/v4/internal/cache"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
@@ -25,6 +26,19 @@ import (
 )
 
 var idx = 0
+var baiduShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
+
+var resolveBaiduShareLink = func(ctx context.Context, d *BaiduShare2, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	count := op.GetDriverCount("BaiduNetdisk")
+	var err error
+	for i := 0; i < count; i++ {
+		link, err := d.link(ctx, file, args)
+		if err == nil {
+			return link, nil
+		}
+	}
+	return nil, err
+}
 
 type BaiduShare2 struct {
 	model.Storage
@@ -209,15 +223,16 @@ func (d *BaiduShare2) List(ctx context.Context, dir model.Obj, args model.ListAr
 }
 
 func (d *BaiduShare2) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
-	count := op.GetDriverCount("BaiduNetdisk")
-	var err error
-	for i := 0; i < count; i++ {
-		link, err := d.link(ctx, file, args)
-		if err == nil {
-			return link, nil
-		}
+	key := file.GetID()
+	if link, ok := baiduShareLinkCache.Get(key); ok {
+		return link, nil
 	}
-	return nil, err
+
+	link, err := resolveBaiduShareLink(ctx, d, file, args)
+	if err == nil && link != nil {
+		baiduShareLinkCache.Set(key, link)
+	}
+	return link, err
 }
 
 func (d *BaiduShare2) link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {

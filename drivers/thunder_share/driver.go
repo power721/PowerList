@@ -3,7 +3,10 @@ package thunder_share
 import (
 	"context"
 	"errors"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/thunder_browser"
+	"github.com/OpenListTeam/OpenList/v4/internal/cache"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -14,6 +17,20 @@ import (
 type ThunderShare struct {
 	model.Storage
 	Addition
+}
+
+var thunderShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
+
+var resolveThunderShareLink = func(ctx context.Context, d *ThunderShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	count := op.GetDriverCount("ThunderBrowser")
+	var err error
+	for i := 0; i < count; i++ {
+		link, err := d.link(ctx, file, args)
+		if err == nil {
+			return link, nil
+		}
+	}
+	return nil, err
 }
 
 func (d *ThunderShare) Config() driver.Config {
@@ -46,15 +63,16 @@ func (d *ThunderShare) List(ctx context.Context, dir model.Obj, args model.ListA
 }
 
 func (d *ThunderShare) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
-	count := op.GetDriverCount("ThunderBrowser")
-	var err error
-	for i := 0; i < count; i++ {
-		link, err := d.link(ctx, file, args)
-		if err == nil {
-			return link, nil
-		}
+	key := file.GetID()
+	if link, ok := thunderShareLinkCache.Get(key); ok {
+		return link, nil
 	}
-	return nil, err
+
+	link, err := resolveThunderShareLink(ctx, d, file, args)
+	if err == nil && link != nil {
+		thunderShareLinkCache.Set(key, link)
+	}
+	return link, err
 }
 
 func (d *ThunderShare) link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
