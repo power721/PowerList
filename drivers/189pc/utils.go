@@ -353,7 +353,7 @@ func (y *Cloud189PC) loginByPassword() (err error) {
 		return &erron
 	}
 	if tokenInfo.ResCode != 0 {
-		err = fmt.Errorf(tokenInfo.ResMessage)
+		err = errors.New(tokenInfo.ResMessage)
 		return err
 	}
 	y.Addition.RefreshToken = tokenInfo.RefreshToken
@@ -412,7 +412,7 @@ func (y *Cloud189PC) loginByQRCode() error {
 			return err
 		}
 		if tokenInfo.ResCode != 0 {
-			return fmt.Errorf(tokenInfo.ResMessage)
+			return errors.New(tokenInfo.ResMessage)
 		}
 		y.Addition.RefreshToken = tokenInfo.RefreshToken
 		y.tokenInfo = &tokenInfo
