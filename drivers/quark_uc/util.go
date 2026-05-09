@@ -6,14 +6,15 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/internal/conf"
-	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"html"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -147,8 +148,10 @@ func (d *QuarkOrUC) getDownloadLink(file model.Obj) (*model.Link, error) {
 		return nil, err
 	}
 
+	exp := time.Hour
 	link := &model.Link{
-		URL: resp.Data[0].DownloadUrl + fmt.Sprintf("#storageId=%d", d.ID),
+		URL:        resp.Data[0].DownloadUrl + fmt.Sprintf("#storageId=%d", d.ID),
+		Expiration: &exp,
 		Header: http.Header{
 			"Cookie":     []string{d.Cookie},
 			"Referer":    []string{d.conf.referer},

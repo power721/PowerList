@@ -2,7 +2,7 @@
 
 ## Summary
 
-Add direct-play support for existing `.cas` files in `189CloudPC`. When a user requests a link for a `.cas` file that already exists in the mounted cloud drive, the driver should restore the original source file into the same directory, return the restored file's playable link, and schedule delayed deletion of the restored file using the same cleanup behavior already used by share-play restore.
+Add direct-play support for existing `.cas` files in `189CloudPC`. When a user requests a link for a `.cas` file that already exists in the mounted cloud drive, the driver should restore the original source file into the same temporary location used by share-play restore, return the restored file's playable link, and schedule delayed deletion of the restored file using the same cleanup behavior already used by share-play restore.
 
 The original `.cas` file must remain in place.
 
@@ -33,8 +33,8 @@ The original `.cas` file must remain in place.
 1. Open the `.cas` file stream through the normal link path.
 2. Parse CAS payload metadata.
 3. Resolve the restore target name from the CAS payload name only.
-4. If a same-named source file already exists in the current directory, reuse it.
-5. Otherwise restore the source file into the current directory.
+4. If a same-named source file already exists in the restore temp directory, reuse it.
+5. Otherwise restore the source file into the restore temp directory.
 6. Return the playable link for the reused or restored source file.
 7. Schedule delayed deletion for that source file using the same delay and async cleanup pattern used by share-play restore.
 8. Keep the original `.cas` file untouched.
@@ -46,7 +46,7 @@ The original `.cas` file must remain in place.
 Modify `drivers/189pc/driver.go` so `Link` no longer treats every file the same. Add a small branch:
 
 - non-`.cas` files continue through the current direct-link logic
-- `.cas` files go through a dedicated helper that restores or reuses the source file before linking it
+- `.cas` files go through a dedicated helper that restores or reuses the source file in the restore temp directory before linking it
 
 This keeps the public entry point correct while avoiding large behavior changes to ordinary link generation.
 
@@ -60,8 +60,8 @@ The CAS play helper should:
 - open a seekable stream for the `.cas` object
 - parse CAS metadata using `readCASRestoreInfo`
 - force payload-name semantics by cloning the driver and setting `RestoreSourceUseCurrentName = false`
-- locate the restore destination as the current parent directory of the `.cas` file
-- check whether the restored source file already exists in that directory
+- locate the restore destination as the same temp directory already used by share-play restore
+- check whether the restored source file already exists in that temp directory
 - if found, reuse that object
 - otherwise call `restoreSourceFromCASInfo`
 - link the chosen source object using the normal link path

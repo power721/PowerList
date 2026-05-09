@@ -248,9 +248,11 @@ func (d *QuarkUCTV) getTranscodingLink(ctx context.Context, file model.Obj) (*mo
 	}
 
 	if url != "" {
+		exp := time.Hour
 		log.Debugf("transcoding link url: %v", url)
 		return &model.Link{
 			URL:           url + fmt.Sprintf("#storageId=%d", d.ID),
+			Expiration:    &exp,
 			ContentLength: size,
 			Concurrency:   d.Concurrency,
 			PartSize:      d.ChunkSize * utils.KB,
