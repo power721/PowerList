@@ -4,6 +4,7 @@ import (
 	"context"
 	_115 "github.com/OpenListTeam/OpenList/v4/drivers/115"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
+	"github.com/OpenListTeam/OpenList/v4/internal/cache"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
@@ -15,6 +16,7 @@ import (
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -24,6 +26,32 @@ type AliyundriveShare2Open struct {
 	model.Storage
 	Addition
 	cron *cron.Cron
+}
+
+var aliyundriveShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
+
+var aliyundriveShareAliTo115Enabled = func() bool {
+	return setting.GetBool(conf.AliTo115)
+}
+
+func aliyundriveShareLinkCacheKey(fileID string) string {
+	return fileID + "|" + strconv.FormatBool(aliyundriveShareAliTo115Enabled())
+}
+
+var resolveAliyundriveShareLink = func(ctx context.Context, d *AliyundriveShare2Open, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	count := op.GetDriverCount("AliyundriveOpen")
+	var err error
+	for i := 0; i < count; i++ {
+		link, myFile, err := d.aliLink(file)
+		if err == nil {
+			if strings.HasSuffix(file.GetName(), ".md") || !aliyundriveShareAliTo115Enabled() {
+				return link, nil
+			}
+
+			return d.p115Link(ctx, link, myFile, args)
+		}
+	}
+	return nil, err
 }
 
 func (d *AliyundriveShare2Open) Config() driver.Config {
@@ -75,19 +103,16 @@ func (d *AliyundriveShare2Open) list(ctx context.Context, dir model.Obj) ([]mode
 }
 
 func (d *AliyundriveShare2Open) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
-	count := op.GetDriverCount("AliyundriveOpen")
-	var err error
-	for i := 0; i < count; i++ {
-		link, myFile, err := d.aliLink(file)
-		if err == nil {
-			if strings.HasSuffix(file.GetName(), ".md") || !setting.GetBool(conf.AliTo115) {
-				return link, nil
-			}
-
-			return d.p115Link(ctx, link, myFile, args)
-		}
+	key := aliyundriveShareLinkCacheKey(file.GetID())
+	if link, ok := aliyundriveShareLinkCache.Get(key); ok {
+		return link, nil
 	}
-	return nil, err
+
+	link, err := resolveAliyundriveShareLink(ctx, d, file, args)
+	if err == nil && link != nil {
+		aliyundriveShareLinkCache.Set(key, link)
+	}
+	return link, err
 }
 
 func (d *AliyundriveShare2Open) aliLink(file model.Obj) (*model.Link, *MyFile, error) {
