@@ -109,7 +109,7 @@ func WebDAVAuth(c *gin.Context) {
 	count, cok := model.LoginCache.Get(ip)
 	if cok && count >= model.DefaultMaxAuthRetries {
 		if c.Request.Method == "OPTIONS" {
-			common.GinWithValue(c, conf.UserKey, guest)
+			common.GinAppendValues(c, conf.UserKey, guest)
 			c.Next()
 			return
 		}
@@ -133,13 +133,13 @@ func WebDAVAuth(c *gin.Context) {
 					c.Abort()
 					return
 				}
-				common.GinWithValue(c, conf.UserKey, admin)
+				common.GinAppendValues(c, conf.UserKey, admin)
 				c.Next()
 				return
 			}
 		}
 		if c.Request.Method == "OPTIONS" {
-			common.GinWithValue(c, conf.UserKey, guest)
+			common.GinAppendValues(c, conf.UserKey, guest)
 			c.Next()
 			return
 		}
@@ -151,7 +151,7 @@ func WebDAVAuth(c *gin.Context) {
 	user, ok := tryLogin(username, password)
 	if !ok {
 		if c.Request.Method == "OPTIONS" {
-			common.GinWithValue(c, conf.UserKey, guest)
+			common.GinAppendValues(c, conf.UserKey, guest)
 			c.Next()
 			return
 		}
@@ -164,7 +164,7 @@ func WebDAVAuth(c *gin.Context) {
 	model.LoginCache.Del(ip)
 	if user.Disabled || !user.CanWebdavRead() {
 		if c.Request.Method == "OPTIONS" {
-			common.GinWithValue(c, conf.UserKey, guest)
+			common.GinAppendValues(c, conf.UserKey, guest)
 			c.Next()
 			return
 		}
@@ -197,11 +197,11 @@ func WebDAVAuth(c *gin.Context) {
 		c.Abort()
 		return
 	}
-	common.GinWithValue(c, conf.UserKey, user)
+	common.GinAppendValues(c, conf.UserKey, user)
 	if user.IsGuest() {
-		common.GinWithValue(c, conf.MetaPassKey, password)
+		common.GinAppendValues(c, conf.MetaPassKey, password)
 	} else {
-		common.GinWithValue(c, conf.MetaPassKey, "")
+		common.GinAppendValues(c, conf.MetaPassKey, "")
 	}
 	c.Next()
 }
