@@ -39,6 +39,7 @@ import (
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/google_drive"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/google_photo"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/guangyapan"
+	_ "github.com/OpenListTeam/OpenList/v4/drivers/guangyapan_share"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/halalcloud"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/halalcloud_open"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/ilanzou"
@@ -84,13 +85,13 @@ import (
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/wps"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/yandex_disk"
 
+	_ "github.com/OpenListTeam/OpenList/v4/drivers/139_grouplink"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/139_share"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/189_share"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/aliyundrive_share2_open"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/baidu_share2"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/quark_uc_share"
 	_ "github.com/OpenListTeam/OpenList/v4/drivers/thunder_share"
-	_ "github.com/OpenListTeam/OpenList/v4/drivers/139_grouplink"
 )
 
 // All do nothing,just for import
