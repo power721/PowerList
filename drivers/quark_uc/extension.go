@@ -88,7 +88,7 @@ func (d *QuarkOrUC) cleanTempFolder() {
 }
 
 func (d *QuarkOrUC) GetTempFile(dirId, id string) (model.Obj, error) {
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 10; i++ {
 		files, err := d.GetFiles(dirId)
 		if err != nil {
 			return nil, err
@@ -99,7 +99,7 @@ func (d *QuarkOrUC) GetTempFile(dirId, id string) (model.Obj, error) {
 				return file, nil
 			}
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	return nil, errors.New("file not found")
