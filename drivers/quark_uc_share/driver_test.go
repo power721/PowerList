@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	quark "github.com/OpenListTeam/OpenList/v4/drivers/quark_uc"
+	"github.com/OpenListTeam/OpenList/v4/drivers/quark_uc_tv"
 	"github.com/OpenListTeam/OpenList/v4/internal/cache"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -88,5 +90,34 @@ func TestQuarkUCShareLink_DifferentFileIDsDoNotShareCache(t *testing.T) {
 	_, _ = d.Link(context.Background(), &model.Object{ID: "file-2", Name: "b.mp4"}, model.LinkArgs{})
 	if resolveCalls != 2 {
 		t.Fatalf("expected resolver twice for different file IDs, got %d", resolveCalls)
+	}
+}
+
+func TestBindRequestDriverUsesSelectedStorageForRequestAndTempDir(t *testing.T) {
+	selected := &quark.QuarkOrUC{TempDirId: "temp-dir-a"}
+	other := &quark.QuarkOrUC{TempDirId: "temp-dir-b"}
+
+	binding := bindRequestDriver(selected)
+	if binding.requestDriver != selected {
+		t.Fatalf("expected request driver to stay bound to selected storage")
+	}
+	if binding.tempDirID() != "temp-dir-a" {
+		t.Fatalf("expected temp dir from selected storage, got %q", binding.tempDirID())
+	}
+	if binding.matches(other) {
+		t.Fatalf("expected binding to reject a different storage instance")
+	}
+}
+
+func TestBindRequestDriverUsesSelectedTVStorageForRequestAndTempDir(t *testing.T) {
+	selected := &quark_uc_tv.QuarkUCTV{TempDirId: "temp-dir-tv-a"}
+	other := &requestTVBinding{tempDirId: "temp-dir-tv-b"}
+
+	binding := bindTVRequestDriver(selected)
+	if binding.tempDirID() != "temp-dir-tv-a" {
+		t.Fatalf("expected tv temp dir from selected storage, got %q", binding.tempDirID())
+	}
+	if binding.matches(other) {
+		t.Fatalf("expected tv binding to reject a different storage instance")
 	}
 }

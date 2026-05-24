@@ -129,7 +129,8 @@ func (d *QuarkUCShare) link(ctx context.Context, file model.Obj, args model.Link
 
 	Cookie = uc.Cookie
 	log.Infof("[%v] 获取%s文件直链 %v %v %v", uc.ID, name, file.GetName(), file.GetID(), file.GetSize())
-	newFile, err := d.saveFile(uc, file.GetID())
+	binding := bindRequestDriver(uc)
+	newFile, err := d.saveFile(binding, uc, file.GetID())
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +153,8 @@ func (d *QuarkUCShare) getTvLink(ctx context.Context, file model.Obj, args model
 		if uc.Cookie != "" {
 			Cookie = uc.Cookie
 			log.Infof("[%v] 获取%s文件直链 %v %v %v", uc.ID, tvName, file.GetName(), file.GetID(), file.GetSize())
-			newFile, err := d.saveTvFile(ctx, uc, file.GetID())
+			binding := bindTVRequestDriver(uc)
+			newFile, err := d.saveTvFile(ctx, binding, uc, file.GetID())
 			if err != nil {
 				return nil, err
 			}

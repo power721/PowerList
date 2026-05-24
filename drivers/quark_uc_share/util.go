@@ -26,6 +26,64 @@ var Cookie = ""
 var idx = 0
 var idx2 = 0
 
+type shareRequestBinding interface {
+	doRequest(d *QuarkUCShare, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error)
+	tempDirID() string
+}
+
+type requestBinding struct {
+	requestDriver *quark.QuarkOrUC
+	cookie        string
+	tempDirId     string
+}
+
+func bindRequestDriver(uc *quark.QuarkOrUC) requestBinding {
+	return requestBinding{
+		requestDriver: uc,
+		cookie:        uc.Cookie,
+		tempDirId:     uc.TempDirId,
+	}
+}
+
+func (b requestBinding) doRequest(d *QuarkUCShare, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
+	if b.requestDriver != nil {
+		return b.requestDriver.Request(pathname, method, callback, resp)
+	}
+	return d.directRequest(b.cookie, pathname, method, callback, resp)
+}
+
+func (b requestBinding) tempDirID() string {
+	return b.tempDirId
+}
+
+func (b requestBinding) matches(uc *quark.QuarkOrUC) bool {
+	return b.requestDriver == uc
+}
+
+type requestTVBinding struct {
+	cookie    string
+	tempDirId string
+}
+
+func bindTVRequestDriver(uc *quark_uc_tv.QuarkUCTV) requestTVBinding {
+	return requestTVBinding{
+		cookie:    uc.Cookie,
+		tempDirId: uc.TempDirId,
+	}
+}
+
+func (b requestTVBinding) doRequest(d *QuarkUCShare, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
+	return d.directRequest(b.cookie, pathname, method, callback, resp)
+}
+
+func (b requestTVBinding) tempDirID() string {
+	return b.tempDirId
+}
+
+func (b requestTVBinding) matches(other *requestTVBinding) bool {
+	return b.cookie == other.cookie && b.tempDirId == other.tempDirId
+}
+
 func (d *QuarkUCShare) getDriverName() string {
 	name := "Quark"
 	if d.config.Name == "UCShare" {
@@ -42,10 +100,14 @@ func (d *QuarkUCShare) request(pathname string, method string, callback base.Req
 		return uc.Request(pathname, method, callback, resp)
 	}
 
+	return d.directRequest(Cookie, pathname, method, callback, resp)
+}
+
+func (d *QuarkUCShare) directRequest(cookieStr string, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
 	u := d.conf.api + pathname
 	req := base.RestyClient.R()
 	req.SetHeaders(map[string]string{
-		"Cookie":     Cookie,
+		"Cookie":     cookieStr,
 		"Accept":     "application/json, text/plain, */*",
 		"User-Agent": d.conf.ua,
 		"Referer":    d.conf.referer,
@@ -111,6 +173,10 @@ func (d *QuarkUCShare) Validate() error {
 }
 
 func (d *QuarkUCShare) getShareToken() error {
+	return d.getShareTokenWithBinding(nil)
+}
+
+func (d *QuarkUCShare) getShareTokenWithBinding(binding shareRequestBinding) error {
 	data := base.Json{
 		"pwd_id":             d.ShareId,
 		"passcode":           d.SharePwd,
@@ -118,7 +184,7 @@ func (d *QuarkUCShare) getShareToken() error {
 	}
 	var errRes Resp
 	var resp ShareTokenResp
-	res, err := d.request("/share/sharepage/token", http.MethodPost, func(req *resty.Request) {
+	res, err := d.requestWithBinding(binding, "/share/sharepage/token", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(data)
 	}, &resp)
 	log.Debugf("getShareToken: %v %v", d.ShareId, string(res))
@@ -134,7 +200,14 @@ func (d *QuarkUCShare) getShareToken() error {
 	return nil
 }
 
-func (d *QuarkUCShare) saveFile(quark *quark.QuarkOrUC, id string) (model.Obj, error) {
+func (d *QuarkUCShare) requestWithBinding(binding shareRequestBinding, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
+	if binding != nil {
+		return binding.doRequest(d, pathname, method, callback, resp)
+	}
+	return d.request(pathname, method, callback, resp)
+}
+
+func (d *QuarkUCShare) saveFile(binding shareRequestBinding, quark *quark.QuarkOrUC, id string) (model.Obj, error) {
 	s := strings.Split(id, "-")
 	fileId := s[0]
 	fileTokenId := s[1]
@@ -144,7 +217,7 @@ func (d *QuarkUCShare) saveFile(quark *quark.QuarkOrUC, id string) (model.Obj, e
 			"fid_list":       []string{fileId},
 			"fid_token_list": []string{fileTokenId},
 			"exclude_fids":   []string{},
-			"to_pdir_fid":    quark.TempDirId,
+			"to_pdir_fid":    binding.tempDirID(),
 			"pwd_id":         d.ShareId,
 			"stoken":         d.ShareToken,
 			"pdir_fid":       "0",
@@ -159,13 +232,13 @@ func (d *QuarkUCShare) saveFile(quark *quark.QuarkOrUC, id string) (model.Obj, e
 			"__t":          strconv.FormatInt(time.Now().Unix(), 10),
 		}
 		var resp SaveResp
-		res, err := d.request("/share/sharepage/save", http.MethodPost, func(req *resty.Request) {
+		res, err := d.requestWithBinding(binding, "/share/sharepage/save", http.MethodPost, func(req *resty.Request) {
 			req.SetBody(data).SetQueryParams(query)
 		}, &resp)
 		log.Debugf("saveFile: %v %+v response: %v, error: %v", id, data, string(res), err)
 		if err != nil {
 			if strings.Contains(err.Error(), "token校验异常") {
-				fileTokenId, err = d.getFileToken(pid, fileId)
+				fileTokenId, err = d.getFileToken(binding, pid, fileId)
 				if err != nil {
 					return nil, err
 				}
@@ -181,7 +254,7 @@ func (d *QuarkUCShare) saveFile(quark *quark.QuarkOrUC, id string) (model.Obj, e
 		taskId := resp.Data.TaskId
 		log.Debugf("save file task id: %v", taskId)
 
-		newFileId, dirId, err := d.getSaveTaskResult(taskId)
+		newFileId, dirId, err := d.getSaveTaskResult(binding, taskId)
 		if err != nil {
 			return nil, err
 		}
@@ -197,7 +270,7 @@ func (d *QuarkUCShare) saveFile(quark *quark.QuarkOrUC, id string) (model.Obj, e
 	return nil, errors.New("save file failed")
 }
 
-func (d *QuarkUCShare) saveTvFile(ctx context.Context, quark *quark_uc_tv.QuarkUCTV, id string) (model.Obj, error) {
+func (d *QuarkUCShare) saveTvFile(ctx context.Context, binding shareRequestBinding, quark *quark_uc_tv.QuarkUCTV, id string) (model.Obj, error) {
 	s := strings.Split(id, "-")
 	fileId := s[0]
 	fileTokenId := s[1]
@@ -207,7 +280,7 @@ func (d *QuarkUCShare) saveTvFile(ctx context.Context, quark *quark_uc_tv.QuarkU
 			"fid_list":       []string{fileId},
 			"fid_token_list": []string{fileTokenId},
 			"exclude_fids":   []string{},
-			"to_pdir_fid":    quark.TempDirId,
+			"to_pdir_fid":    binding.tempDirID(),
 			"pwd_id":         d.ShareId,
 			"stoken":         d.ShareToken,
 			"pdir_fid":       "0",
@@ -222,13 +295,13 @@ func (d *QuarkUCShare) saveTvFile(ctx context.Context, quark *quark_uc_tv.QuarkU
 			"__t":          strconv.FormatInt(time.Now().Unix(), 10),
 		}
 		var resp SaveResp
-		res, err := d.request("/share/sharepage/save", http.MethodPost, func(req *resty.Request) {
+		res, err := d.requestWithBinding(binding, "/share/sharepage/save", http.MethodPost, func(req *resty.Request) {
 			req.SetBody(data).SetQueryParams(query)
 		}, &resp)
 		log.Debugf("saveFile: %v %+v response: %v, error: %v", id, data, string(res), err)
 		if err != nil {
 			if strings.Contains(err.Error(), "token校验异常") {
-				fileTokenId, err = d.getFileToken(pid, fileId)
+				fileTokenId, err = d.getFileToken(binding, pid, fileId)
 				if err != nil {
 					return nil, err
 				}
@@ -244,7 +317,7 @@ func (d *QuarkUCShare) saveTvFile(ctx context.Context, quark *quark_uc_tv.QuarkU
 		taskId := resp.Data.TaskId
 		log.Debugf("save file task id: %v", taskId)
 
-		newFileId, dirId, err := d.getSaveTaskResult(taskId)
+		newFileId, dirId, err := d.getSaveTaskResult(binding, taskId)
 		if err != nil {
 			return nil, err
 		}
@@ -260,7 +333,7 @@ func (d *QuarkUCShare) saveTvFile(ctx context.Context, quark *quark_uc_tv.QuarkU
 	return nil, errors.New("save file failed")
 }
 
-func (d *QuarkUCShare) getSaveTaskResult(taskId string) (string, string, error) {
+func (d *QuarkUCShare) getSaveTaskResult(binding shareRequestBinding, taskId string) (string, string, error) {
 	time.Sleep(200 * time.Millisecond)
 	for retry := 1; retry <= 60; {
 		query := map[string]string{
@@ -273,7 +346,7 @@ func (d *QuarkUCShare) getSaveTaskResult(taskId string) (string, string, error) 
 			"__t":          strconv.FormatInt(time.Now().Unix(), 10),
 		}
 		var resp SaveTaskResp
-		res, err := d.request("/task", http.MethodGet, func(req *resty.Request) {
+		res, err := d.requestWithBinding(binding, "/task", http.MethodGet, func(req *resty.Request) {
 			req.SetQueryParams(query)
 		}, &resp)
 		log.Debugf("getSaveTaskResult: %v %v", taskId, string(res))
@@ -374,6 +447,10 @@ func (d *QuarkUCShare) deleteFileTv(ctx context.Context, quark *quark_uc_tv.Quar
 }
 
 func (d *QuarkUCShare) getShareFiles(id string) ([]File, error) {
+	return d.getShareFilesWithBinding(nil, id)
+}
+
+func (d *QuarkUCShare) getShareFilesWithBinding(binding shareRequestBinding, id string) ([]File, error) {
 	log.Debugf("getShareFiles: %v", id)
 	s := strings.Split(id, "-")
 	fileId := s[0]
@@ -396,15 +473,17 @@ func (d *QuarkUCShare) getShareFiles(id string) ([]File, error) {
 		}
 		log.Debugf("getShareFiles query: %v", query)
 		var resp ListResp
-		res, err := d.request("/share/sharepage/detail", http.MethodGet, func(req *resty.Request) {
+		res, err := d.requestWithBinding(binding, "/share/sharepage/detail", http.MethodGet, func(req *resty.Request) {
 			req.SetQueryParams(query)
 		}, &resp)
 		name := d.getDriverName()
 		log.Debugf("%s share get files: %s", name, string(res))
 		if err != nil {
 			if err.Error() == "分享的stoken过期" {
-				d.getShareToken()
-				return d.getShareFiles(id)
+				if err := d.getShareTokenWithBinding(binding); err != nil {
+					return nil, err
+				}
+				return d.getShareFilesWithBinding(binding, id)
 			}
 			return nil, err
 		}
@@ -416,8 +495,10 @@ func (d *QuarkUCShare) getShareFiles(id string) ([]File, error) {
 			page++
 		} else {
 			if resp.Message == "分享的stoken过期" {
-				d.getShareToken()
-				return d.getShareFiles(id)
+				if err := d.getShareTokenWithBinding(binding); err != nil {
+					return nil, err
+				}
+				return d.getShareFilesWithBinding(binding, id)
 			}
 			return nil, errors.New(resp.Message)
 		}
@@ -426,8 +507,8 @@ func (d *QuarkUCShare) getShareFiles(id string) ([]File, error) {
 	return files, nil
 }
 
-func (d *QuarkUCShare) getFileToken(pid, fid string) (string, error) {
-	files, err := d.getShareFiles(pid)
+func (d *QuarkUCShare) getFileToken(binding shareRequestBinding, pid, fid string) (string, error) {
+	files, err := d.getShareFilesWithBinding(binding, pid)
 	if err != nil {
 		return "", err
 	}
