@@ -427,10 +427,11 @@ func (y *Cloud189PC) uploadFile(ctx context.Context, dstDir model.Obj, stream mo
 	uploadMethod := y.UploadMethod
 	if stream.IsForceStreamUpload() {
 		uploadMethod = "stream"
-	}
-
-	// 旧版上传家庭云也有限制
-	if uploadMethod == "old" {
+	} else if y.Addition.RapidUpload && stream.GetFile() != nil {
+		// 文件流支持随机读取，走FastUpload计算MD5并尝试秒传
+		uploadMethod = "rapid"
+	} else if uploadMethod == "old" {
+		// 旧版上传家庭云也有限制
 		return y.OldUpload(ctx, dstDir, stream, up, isFamily, overwrite)
 	}
 

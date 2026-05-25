@@ -21,6 +21,7 @@ type Addition struct {
 	FamilyTransfer             bool   `json:"family_transfer"`
 	RapidUpload                bool   `json:"rapid_upload"`
 	NoUseOcr                   bool   `json:"no_use_ocr"`
+	GenerateTorrent            bool   `json:"generate_torrent" help:"Generate torrent file with CAS extension after upload"`
 	GenerateCAS                bool   `json:"generate_cas" help:"上传文件后，在同目录生成一个同名的 .cas 元数据文件"`
 	DeleteSource               bool   `json:"delete_source" help:"成功生成 .cas 文件后，自动删除原始源文件"`
 	RestoreSourceFromCAS       bool   `json:"restore_source_from_cas" help:"上传 .cas 文件时，尝试根据其中的哈希信息秒传还原源文件，而不是直接上传 .cas 文件本身"`
