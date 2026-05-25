@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	_115 "github.com/OpenListTeam/OpenList/v4/drivers/115"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
@@ -133,12 +134,14 @@ func (d *Pan115Share) link(ctx context.Context, file model.Obj, args model.LinkA
 	if err != nil {
 		return nil, err
 	}
-
 	go delayDelete115(pan115, sha1)
 	exp := 4 * time.Hour
+	header := http.Header{}
+	header.Set("User-Agent", conf.UA115Browser)
 	return &model.Link{
 		URL:         downloadInfo.URL.URL + fmt.Sprintf("#storageId=%d", pan115.ID),
 		Expiration:  &exp,
+		Header:      header,
 		Concurrency: pan115.Concurrency,
 		PartSize:    pan115.ChunkSize * utils.KB,
 	}, nil
