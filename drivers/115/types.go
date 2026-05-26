@@ -26,6 +26,10 @@ func (f *FileObj) GetDuration() int {
 	return 0
 }
 
+func (f *FileObj) Thumb() string {
+	return ""
+}
+
 type UploadResult struct {
 	driver.BasicResp
 	Data struct {

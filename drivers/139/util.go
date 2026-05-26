@@ -12,8 +12,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/internal/conf"
-	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"io"
 	"net/http"
 	"net/url"
@@ -122,7 +120,6 @@ func (d *Yun139) refreshToken() error {
 	}
 
 	d.Authorization = base64.StdEncoding.EncodeToString([]byte(splits[0] + ":" + splits[1] + ":" + resp.Token))
-	token.SaveAccountToken(conf.PAN139, d.Authorization, int(d.ID))
 	op.MustSaveDriverStorage(d)
 	return nil
 }

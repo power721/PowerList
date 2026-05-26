@@ -112,10 +112,6 @@ func (t *TreeResp) GetSize() int64 {
 	return t.Size
 }
 
-func (t *TreeResp) GetDuration() int {
-	return 0
-}
-
 func (t *TreeResp) GetName() string {
 	return t.Name
 }
@@ -126,6 +122,10 @@ func (t *TreeResp) ModTime() time.Time {
 
 func (t *TreeResp) CreateTime() time.Time {
 	return t.Created
+}
+
+func (t *TreeResp) GetDuration() int {
+	return 0
 }
 
 func (t *TreeResp) IsDir() bool {

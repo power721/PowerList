@@ -41,7 +41,8 @@ type FileInfo struct {
 }
 
 type filesResp struct {
-	Files []FileInfo `json:"files"`
+	Files      []FileInfo `json:"files"`
+	NextOffset int        `json:"next_offset"`
 }
 
 type downloadResp struct {
@@ -77,10 +78,6 @@ func (o *Obj) GetSize() int64 {
 	return o.size
 }
 
-func (o *Obj) GetDuration() int {
-	return 0
-}
-
 func (o *Obj) GetName() string {
 	return o.name
 }
@@ -91,6 +88,10 @@ func (o *Obj) ModTime() time.Time {
 
 func (o *Obj) CreateTime() time.Time {
 	return o.ctime
+}
+
+func (o *Obj) GetDuration() int {
+	return 0
 }
 
 func (o *Obj) IsDir() bool {

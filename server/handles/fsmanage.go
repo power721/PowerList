@@ -6,18 +6,18 @@ import (
 	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
-	"github.com/OpenListTeam/OpenList/v4/internal/task"
-
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/fs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/sign"
+	"github.com/OpenListTeam/OpenList/v4/internal/task"
 	"github.com/OpenListTeam/OpenList/v4/pkg/generic"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/OpenListTeam/OpenList/v4/server/common"
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
+	log "github.com/sirupsen/logrus"
 )
 
 type MkdirOrLinkReq struct {
@@ -111,25 +111,38 @@ func FsMove(c *gin.Context) {
 		return
 	}
 
-	var validNames []string
-	if !req.Overwrite {
-		for _, name := range req.Names {
-			if res, _ := fs.Get(c.Request.Context(), stdpath.Join(dstDir, name), &fs.GetArgs{NoLog: true}); res != nil && !req.SkipExisting {
-				common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
+	validPaths := make([]string, 0, len(req.Names))
+	for _, name := range req.Names {
+		// ensure req.Names is not a relative path
+		srcPath := stdpath.Join(req.SrcDir, name)
+		srcPath, err = user.JoinPath(srcPath)
+		if err != nil {
+			common.ErrorResp(c, err, 403)
+			return
+		}
+		if !req.Overwrite {
+			base := stdpath.Base(srcPath)
+			if base == "." || base == "/" {
+				common.ErrorStrResp(c, fmt.Sprintf("invalid file name [%s]", name), 400)
 				return
-			} else if res == nil {
-				validNames = append(validNames, name)
+			}
+			if res, _ := fs.Get(c.Request.Context(), stdpath.Join(dstDir, base), &fs.GetArgs{NoLog: true}); res != nil {
+				if !req.SkipExisting {
+					common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
+					return
+				} else {
+					continue
+				}
 			}
 		}
-	} else {
-		validNames = req.Names
+		validPaths = append(validPaths, srcPath)
 	}
 
 	// Create all tasks immediately without any synchronous validation
 	// All validation will be done asynchronously in the background
 	var addedTasks []task.TaskExtensionInfo
-	for i, name := range validNames {
-		t, err := fs.Move(c.Request.Context(), stdpath.Join(srcDir, name), dstDir, len(validNames) > i+1)
+	for i, p := range validPaths {
+		t, err := fs.Move(c.Request.Context(), p, dstDir, len(validPaths) > i+1)
 		if t != nil {
 			addedTasks = append(addedTasks, t)
 		}
@@ -197,33 +210,42 @@ func FsCopy(c *gin.Context) {
 		return
 	}
 
-	var validNames []string
-	if !req.Overwrite {
-		for _, name := range req.Names {
-			if res, _ := fs.Get(c.Request.Context(), stdpath.Join(dstDir, name), &fs.GetArgs{NoLog: true}); res != nil {
+	validPaths := make([]string, 0, len(req.Names))
+	for _, name := range req.Names {
+		// ensure req.Names is not a relative path
+		srcPath := stdpath.Join(req.SrcDir, name)
+		srcPath, err = user.JoinPath(srcPath)
+		if err != nil {
+			common.ErrorResp(c, err, 403)
+			return
+		}
+		if !req.Overwrite {
+			base := stdpath.Base(srcPath)
+			if base == "." || base == "/" {
+				common.ErrorStrResp(c, fmt.Sprintf("invalid file name [%s]", name), 400)
+				return
+			}
+			if res, _ := fs.Get(c.Request.Context(), stdpath.Join(dstDir, base), &fs.GetArgs{NoLog: true}); res != nil {
 				if !req.SkipExisting && !req.Merge {
 					common.ErrorStrResp(c, fmt.Sprintf("file [%s] exists", name), 403)
 					return
-				} else if req.Merge && res.IsDir() {
-					validNames = append(validNames, name)
+				} else if !req.Merge || !res.IsDir() {
+					continue
 				}
-			} else {
-				validNames = append(validNames, name)
 			}
 		}
-	} else {
-		validNames = req.Names
+		validPaths = append(validPaths, srcPath)
 	}
 
 	// Create all tasks immediately without any synchronous validation
 	// All validation will be done asynchronously in the background
 	var addedTasks []task.TaskExtensionInfo
-	for i, name := range validNames {
+	for i, p := range validPaths {
 		var t task.TaskExtensionInfo
 		if req.Merge {
-			t, err = fs.Merge(c.Request.Context(), stdpath.Join(srcDir, name), dstDir, len(validNames) > i+1)
+			t, err = fs.Merge(c.Request.Context(), p, dstDir, len(validPaths) > i+1)
 		} else {
-			t, err = fs.Copy(c.Request.Context(), stdpath.Join(srcDir, name), dstDir, len(validNames) > i+1)
+			t, err = fs.Copy(c.Request.Context(), p, dstDir, len(validPaths) > i+1)
 		}
 		if t != nil {
 			addedTasks = append(addedTasks, t)
@@ -326,32 +348,34 @@ func FsRemove(c *gin.Context) {
 		common.ErrorResp(c, errs.PermissionDenied, 403)
 		return
 	}
-	reqDir, err := user.JoinPath(req.Dir)
+	reqPath, err := user.JoinPath(req.Dir)
 	if err != nil {
 		common.ErrorResp(c, err, 403)
 		return
 	}
-	meta, err := op.GetNearestMeta(reqDir)
+	meta, err := op.GetNearestMeta(reqPath)
 	if err != nil && !errors.Is(errors.Cause(err), errs.MetaNotFound) {
 		common.ErrorResp(c, err, 500, true)
 		return
 	}
-	if !common.CanWrite(user, meta, reqDir) {
+	if !common.CanWrite(user, meta, reqPath) {
 		common.ErrorResp(c, errs.PermissionDenied, 403)
 		return
 	}
-	for _, name := range req.Names {
-		// Skip invalid item names (empty string, whitespace, ".", "/","\t\t","..") to prevent accidental removal of current directory
-		if strings.TrimSpace(utils.FixAndCleanPath(name)) == "/" {
-			utils.Log.Warnf("FsRemove: invalid item skipped: %s (parent directory: %s)\n", name, reqDir)
+	for i, name := range req.Names {
+		fullPath := stdpath.Join(reqPath, name)
+		if !strings.HasPrefix(fullPath+"/", reqPath+"/") {
+			log.Warnf("FsRemove: path traversal attempt skipped: %s (dir: %s)\n", name, req.Dir)
+			req.Names[i] = ""
 			continue
 		}
-		fullPath := stdpath.Join(reqDir, name)
-		if !strings.HasPrefix(fullPath+"/", reqDir+"/") {
-			utils.Log.Warnf("FsRemove: path traversal attempt skipped: %s (dir: %s)\n", name, req.Dir)
+		req.Names[i] = fullPath
+	}
+	for _, path := range req.Names {
+		if path == "" {
 			continue
 		}
-		err := fs.Remove(c.Request.Context(), fullPath)
+		err := fs.Remove(c.Request.Context(), path)
 		if err != nil {
 			common.ErrorResp(c, err, 500)
 			return

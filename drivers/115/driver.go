@@ -85,8 +85,7 @@ func (d *Pan115) Link(ctx context.Context, file model.Obj, args model.LinkArgs) 
 		userAgent = conf.UA115Browser
 	}
 
-	downloadInfo, err := d.
-		DownloadWithUA(file.(*FileObj).PickCode, userAgent)
+	downloadInfo, err := d.client.DownloadWithUA(file.(*FileObj).PickCode, userAgent)
 	if err != nil {
 		return nil, err
 	}

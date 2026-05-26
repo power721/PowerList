@@ -732,3 +732,4 @@ func (d *Mediafire) getFileByHash(ctx context.Context, hash string) (*model.ObjT
 	file := resp.Response.FileInfo[0]
 	return d.fileToObj(file), nil
 }
+

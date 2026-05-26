@@ -99,7 +99,6 @@ func getCurrentGoroutineStack() string {
 
 // initStorage initialize the driver and store to storagesMap
 func initStorage(ctx context.Context, storage model.Storage, storageDriver driver.Driver) (err error) {
-	log.Println("initStorage", storage.Driver, storage.MountPath)
 	storageDriver.SetStorage(storage)
 	driverStorage := storageDriver.GetStorage()
 	defer func() {
@@ -139,7 +138,6 @@ func initStorage(ctx context.Context, storage model.Storage, storageDriver drive
 	if err == nil {
 		err = storageDriver.Init(ctx)
 	}
-	log.Println("Store", driverStorage.Driver, driverStorage.MountPath)
 	storagesMap.Store(driverStorage.MountPath, storageDriver)
 	if err != nil {
 		if IsUseOnlineAPI(storageDriver) {

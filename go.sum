@@ -29,8 +29,8 @@ github.com/Masterminds/semver/v3 v3.2.0 h1:3MEsd0SM6jqZojhjLWWeBY+Kcjy9i6MQAeY7Y
 github.com/Masterminds/semver/v3 v3.2.0/go.mod h1:qvl/7zhW3nngYb5+80sSMF+FG2BjYrf8m9wsX0PNOMQ=
 github.com/Max-Sum/base32768 v0.0.0-20230304063302-18e6ce5945fd h1:nzE1YQBdx1bq9IlZinHa+HVffy+NmVRoKr+wHN8fpLE=
 github.com/Max-Sum/base32768 v0.0.0-20230304063302-18e6ce5945fd/go.mod h1:C8yoIfvESpM3GD07OCHU7fqI7lhwyZ2Td1rbNbTAhnc=
-github.com/OpenListTeam/115-sdk-go v0.2.2 h1:JCrGHqQjBX3laOA6Hw4CuBovSg7g+FC5s0LEAYsRciU=
-github.com/OpenListTeam/115-sdk-go v0.2.2/go.mod h1:cfvitk2lwe6036iNi2h+iNxwxWDifKZsSvNtrur5BqU=
+github.com/OpenListTeam/115-sdk-go v0.2.3 h1:nDNz0GxgliW+nT2Ds486k/rp/GgJj7Ngznc98ZBUwZo=
+github.com/OpenListTeam/115-sdk-go v0.2.3/go.mod h1:cfvitk2lwe6036iNi2h+iNxwxWDifKZsSvNtrur5BqU=
 github.com/OpenListTeam/go-cache v0.1.0 h1:eV2+FCP+rt+E4OCJqLUW7wGccWZNJMV0NNkh+uChbAI=
 github.com/OpenListTeam/go-cache v0.1.0/go.mod h1:AHWjKhNK3LE4rorVdKyEALDHoeMnP8SjiNyfVlB+Pz4=
 github.com/OpenListTeam/gsync v0.1.0 h1:ywzGybOvA3lW8K1BUjKZ2IUlT2FSlzPO4DOazfYXjcs=
@@ -63,6 +63,8 @@ github.com/RoaringBitmap/roaring/v2 v2.4.5 h1:uGrrMreGjvAtTBobc0g5IrW1D5ldxDQYe2
 github.com/RoaringBitmap/roaring/v2 v2.4.5/go.mod h1:FiJcsfkGje/nZBZgCu0ZxCPOKD/hVXDS2dXi7/eUFE0=
 github.com/STARRY-S/zip v0.2.1 h1:pWBd4tuSGm3wtpoqRZZ2EAwOmcHK6XFf7bU9qcJXyFg=
 github.com/STARRY-S/zip v0.2.1/go.mod h1:xNvshLODWtC4EJ702g7cTYn13G53o1+X9BWnPFpcWV4=
+github.com/SheltonZhu/115driver v1.2.3 h1:94XMP/ey7VXIlpoBLIJHEoXu7N8YsELZlXVbxWcDDvk=
+github.com/SheltonZhu/115driver v1.2.3/go.mod h1:Zk7Qz7SYO1QU0SJIne6DnUD2k36S3wx/KbsQpxcfY/Y=
 github.com/abbot/go-http-auth v0.4.0 h1:QjmvZ5gSC7jm3Zg54DqWE/T5m1t2AfDu6QlXJT0EVT0=
 github.com/abbot/go-http-auth v0.4.0/go.mod h1:Cz6ARTIzApMJDzh5bRMSUou6UMSp0IEXg9km/ci7TJM=
 github.com/aead/ecdh v0.2.0 h1:pYop54xVaq/CEREFEcukHRZfTdjiWvYIsZDXXrBapQQ=
@@ -560,9 +562,6 @@ github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRI
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 h1:o4JXh1EVt9k/+g42oCprj/FisM4qX9L3sZB3upGN2ZU=
 github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55/go.mod h1:OmDBASR4679mdNQnz2pUhc2G8CO2JrUAVFDRBDP/hJE=
-github.com/power721/115driver v0.2.5 h1:n380bBRDMrQHCtuBpsov+D3X90hdASuhVTBzlJp4yBQ=
-github.com/power721/115driver v0.2.5/go.mod h1:3i/pNjW/uBN10+0ruqQMSdv8HZFRfKczebSsWxp4ed8=
-github.com/power721/115driver v0.2.6 h1:m/tYSfXJQBEgFAFTuHBGegxEbp5E6dv5KOpew6rRs0I=
 github.com/power721/115driver v0.2.6/go.mod h1:3i/pNjW/uBN10+0ruqQMSdv8HZFRfKczebSsWxp4ed8=
 github.com/pquerna/cachecontrol v0.1.0 h1:yJMy84ti9h/+OEWa752kBTKv4XC30OtVVHYv/8cTqKc=
 github.com/pquerna/cachecontrol v0.1.0/go.mod h1:NrUG3Z7Rdu85UNR3vm7SOsl1nFIeSiQnrHV5K9mBcUI=
@@ -874,3 +873,7 @@ nullprogram.com/x/optparse v1.0.0/go.mod h1:KdyPE+Igbe0jQUrVfMqDMeJQIJZEuyV7pjYm
 resty.dev/v3 v3.0.0-beta.2 h1:xu4mGAdbCLuc3kbk7eddWfWm4JfhwDtdapwss5nCjnQ=
 resty.dev/v3 v3.0.0-beta.2/go.mod h1:OgkqiPvTDtOuV4MGZuUDhwOpkY8enjOsjjMzeOHefy4=
 sigs.k8s.io/yaml v1.2.0/go.mod h1:yfXDCHCao9+ENCvLSE62v9VSji2MKu5jeNfTrofGhJc=
+github.com/power721/115driver v0.2.5 h1:n380bBRDMrQHCtuBpsov+D3X90hdASuhVTBzlJp4yBQ=
+github.com/power721/115driver v0.2.5/go.mod h1:3i/pNjW/uBN10+0ruqQMSdv8HZFRfKczebSsWxp4ed8=
+github.com/power721/115driver v0.2.6 h1:m/tYSfXJQBEgFAFTuHBGegxEbp5E6dv5KOpew6rRs0I=
+github.com/power721/115driver v0.2.6/go.mod h1:3i/pNjW/uBN10+0ruqQMSdv8HZFRfKczebSsWxp4ed8=
