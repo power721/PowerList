@@ -1,7 +1,7 @@
 set -e
-appName="openlist"
+appName="alist"
 builtAt="$(date +'%F %T %z')"
-gitAuthor="The OpenList Projects Contributors <noreply@openlist.team>"
+gitAuthor="power721"
 gitCommit=$(git log --pretty=format:"%h" -1)
 
 # Set frontend repository, default to OpenListTeam/OpenList-Frontend
@@ -28,8 +28,10 @@ else
   git tag -d beta || true
   # Always true if there's no tag
   version=$(git describe --abbrev=0 --tags 2>/dev/null || echo "v0.0.0")
-  webVersion=$(eval "curl -fsSL --max-time 2 $githubAuthArgs \"https://api.github.com/repos/$frontendRepo/releases/latest\"" | grep "tag_name" | head -n 1 | awk -F ":" '{print $2}' | sed 's/\"//g;s/,//g;s/ //g')
+#  webVersion=$(eval "curl -fsSL --max-time 2 $githubAuthArgs \"https://api.github.com/repos/$frontendRepo/releases/latest\"" | grep "tag_name" | head -n 1 | awk -F ":" '{print $2}' | sed 's/\"//g;s/,//g;s/ //g')
 fi
+
+webVersion=4.2.2
 
 echo "backend version: $version"
 echo "frontend version: $webVersion"
@@ -95,11 +97,10 @@ AssertStaticBinary() {
   echo "Warning: readelf/file not found, skip static verification for $binary"
   return 0
 }
-
 FetchWebRolling() {
   pre_release_json=$(eval "curl -fsSL --max-time 2 $githubAuthArgs -H \"Accept: application/vnd.github.v3+json\" \"https://api.github.com/repos/$frontendRepo/releases/tags/rolling\"")
   pre_release_assets=$(echo "$pre_release_json" | jq -r '.assets[].browser_download_url')
-  
+
   # There is no lite for rolling
   pre_release_tar_url=$(echo "$pre_release_assets" | grep "openlist-frontend-dist" | grep -v "lite" | grep "\.tar\.gz$")
 
@@ -112,13 +113,13 @@ FetchWebRolling() {
 FetchWebRelease() {
   release_json=$(eval "curl -fsSL --max-time 2 $githubAuthArgs -H \"Accept: application/vnd.github.v3+json\" \"https://api.github.com/repos/$frontendRepo/releases/latest\"")
   release_assets=$(echo "$release_json" | jq -r '.assets[].browser_download_url')
-  
+
   if [ "$useLite" = true ]; then
     release_tar_url=$(echo "$release_assets" | grep "openlist-frontend-dist-lite" | grep "\.tar\.gz$")
   else
     release_tar_url=$(echo "$release_assets" | grep "openlist-frontend-dist" | grep -v "lite" | grep "\.tar\.gz$")
   fi
-  
+
   curl -fsSL "$release_tar_url" -o dist.tar.gz
   rm -rf public/dist && mkdir -p public/dist
   tar -zxvf dist.tar.gz -C public/dist
@@ -141,20 +142,20 @@ BuildWin7() {
   # Setup Win7 Go compiler (patched version that supports Windows 7)
   go_version=$(go version | grep -o 'go[0-9]\+\.[0-9]\+\.[0-9]\+' | sed 's/go//')
   echo "Detected Go version: $go_version"
-  
+
   curl -fsSL --retry 3 -o go-win7.zip -H "Authorization: Bearer $GITHUB_TOKEN" \
     "https://github.com/XTLS/go-win7/releases/download/patched-${go_version}/go-for-win7-linux-amd64.zip"
-  
+
   rm -rf go-win7
   unzip go-win7.zip -d go-win7
   rm go-win7.zip
-  
+
   # Set permissions for all wrapper files
   chmod +x ./wrapper/zcc-win7
   chmod +x ./wrapper/zcxx-win7
   chmod +x ./wrapper/zcc-win7-386
   chmod +x ./wrapper/zcxx-win7-386
-  
+
   # Build for both 386 and amd64 architectures
   for arch in "386" "amd64"; do
     echo "building for windows7-${arch}"
@@ -162,7 +163,7 @@ BuildWin7() {
     export GOOS=windows
     export GOARCH=${arch}
     export CGO_ENABLED=1
-    
+
     # Use architecture-specific wrapper files
     if [ "$arch" = "386" ]; then
       export CC=$(pwd)/wrapper/zcc-win7-386
@@ -171,7 +172,7 @@ BuildWin7() {
       export CC=$(pwd)/wrapper/zcc-win7
       export CXX=$(pwd)/wrapper/zcxx-win7
     fi
-    
+
     # Use the patched Go compiler for Win7 compatibility
     $(pwd)/go-win7/bin/go build -o "${1}-${arch}.exe" -ldflags="$ldflags" -tags="$build_tags" .
   done
@@ -217,7 +218,7 @@ BuildDocker() {
 PrepareBuildDockerMusl() {
   mkdir -p build/musl-libs
   BASE="https://github.com/OpenListTeam/musl-compilers/releases/latest/download/"
-  FILES=(x86_64-linux-musl-cross aarch64-linux-musl-cross i486-linux-musl-cross armv6-linux-musleabihf-cross armv7l-linux-musleabihf-cross riscv64-linux-musl-cross powerpc64le-linux-musl-cross loongarch64-linux-musl-cross) ## Disable s390x-linux-musl-cross builds
+  FILES=(x86_64-linux-musl-cross aarch64-linux-musl-cross)
   for i in "${FILES[@]}"; do
     url="${BASE}${i}.tgz"
     lib_tgz="build/${i}.tgz"
@@ -236,8 +237,8 @@ BuildDockerMultiplatform() {
   docker_lflags="$(GetMuslStaticLdflags)"
   export CGO_ENABLED=1
 
-  OS_ARCHES=(linux-amd64 linux-arm64 linux-386 linux-riscv64 linux-ppc64le linux-loong64) ## Disable linux-s390x builds
-  CGO_ARGS=(x86_64-linux-musl-gcc aarch64-linux-musl-gcc i486-linux-musl-gcc riscv64-linux-musl-gcc powerpc64le-linux-musl-gcc loongarch64-linux-musl-gcc) ## Disable s390x-linux-musl-gcc builds
+  OS_ARCHES=(linux-amd64 linux-arm64)
+  CGO_ARGS=(x86_64-linux-musl-gcc aarch64-linux-musl-gcc)
   for i in "${!OS_ARCHES[@]}"; do
     os_arch=${OS_ARCHES[$i]}
     cgo_cc=${CGO_ARGS[$i]}
@@ -252,24 +253,24 @@ BuildDockerMultiplatform() {
     AssertStaticBinary "build/$os/$arch/$appName"
   done
 
-  DOCKER_ARM_ARCHES=(linux-arm/v6 linux-arm/v7)
-  CGO_ARGS=(armv6-linux-musleabihf-gcc armv7l-linux-musleabihf-gcc)
-  GO_ARM=(6 7)
-  export GOOS=linux
-  export GOARCH=arm
-  for i in "${!DOCKER_ARM_ARCHES[@]}"; do
-    docker_arch=${DOCKER_ARM_ARCHES[$i]}
-    cgo_cc=${CGO_ARGS[$i]}
-    export GOARM=${GO_ARM[$i]}
-    export CC=${cgo_cc}
-    echo "building for $docker_arch"
-    CGO_LDFLAGS="-static" go build -o build/${docker_arch%%-*}/${docker_arch##*-}/"$appName" -ldflags="$docker_lflags" -tags=jsoniter .
-    AssertStaticBinary "build/${docker_arch%%-*}/${docker_arch##*-}/$appName"
-  done
+# do not support arm v6/v7
+#  DOCKER_ARM_ARCHES=(linux-arm/v6 linux-arm/v7)
+#  CGO_ARGS=(armv6-linux-musleabihf-gcc armv7l-linux-musleabihf-gcc)
+#  GO_ARM=(6 7)
+#  export GOOS=linux
+#  export GOARCH=arm
+#  for i in "${!DOCKER_ARM_ARCHES[@]}"; do
+#    docker_arch=${DOCKER_ARM_ARCHES[$i]}
+#    cgo_cc=${CGO_ARGS[$i]}
+#    export GOARM=${GO_ARM[$i]}
+#    export CC=${cgo_cc}
+#    echo "building for $docker_arch"
+#    CGO_LDFLAGS="-static" go build -o build/${docker_arch%%-*}/${docker_arch##*-}/"$appName" -ldflags="$docker_lflags" -tags=jsoniter .
+#    AssertStaticBinary "build/${docker_arch%%-*}/${docker_arch##*-}/$appName"
+#  done
 }
 
 BuildRelease() {
-  rm -rf .git/
   mkdir -p "build"
   BuildWinArm64 ./build/"$appName"-windows-arm64.exe
   BuildWin7 ./build/"$appName"-windows7
@@ -279,7 +280,7 @@ BuildRelease() {
   # cp ./"$appName"-windows-amd64.exe ./"$appName"-windows-amd64-upx.exe
   # upx -9 ./"$appName"-windows-amd64-upx.exe
   mv "$appName"-* build
-  
+
   # Build LoongArch with glibc (both old world abi1.0 and new world abi2.0)
   # Separate from musl builds to avoid cache conflicts
   BuildLoongGLIBC ./build/$appName-linux-loong64-abi1.0 abi1.0
@@ -292,21 +293,21 @@ BuildLoongGLIBC() {
   local oldWorldGoVersion="1.25.0"
   local loong_tags
   loong_tags=$(GetBuildTagsForTarget "linux-loong64")
-  
+
   if [ "$target_abi" = "abi1.0" ]; then
     echo building for linux-loong64-abi1.0
   else
     echo building for linux-loong64-abi2.0
     target_abi="abi2.0"  # Default to abi2.0 if not specified
   fi
-  
+
   # Note: No longer need global cache cleanup since ABI1.0 uses isolated cache directory
   echo "Using optimized cache strategy: ABI1.0 has isolated cache, ABI2.0 uses standard cache"
-  
+
   if [ "$target_abi" = "abi1.0" ]; then
     # Setup abi1.0 toolchain and patched Go compiler similar to cgo-action implementation
     echo "Setting up Loongson old-world ABI1.0 toolchain and patched Go compiler..."
-    
+
     # Download and setup patched Go compiler for old-world
     if ! curl -fsSL --retry 3 -H "Authorization: Bearer $GITHUB_TOKEN" \
       "https://github.com/loong64/loong64-abi1.0-toolchains/releases/download/20250821/go${oldWorldGoVersion}.linux-amd64.tar.gz" \
@@ -320,7 +321,7 @@ BuildLoongGLIBC() {
       fi
       return 1
     fi
-    
+
     rm -rf go-loong64-abi1.0
     mkdir go-loong64-abi1.0
     if ! tar -xzf go-loong64-abi1.0.tar.gz -C go-loong64-abi1.0 --strip-components=1; then
@@ -328,7 +329,7 @@ BuildLoongGLIBC() {
       return 1
     fi
     rm go-loong64-abi1.0.tar.gz
-    
+
     # Download and setup GCC toolchain for old-world
     if ! curl -fsSL --retry 3 -H "Authorization: Bearer $GITHUB_TOKEN" \
       "https://github.com/loong64/loong64-abi1.0-toolchains/releases/download/20250722/loongson-gnu-toolchain-8.3.novec-x86_64-loongarch64-linux-gnu-rc1.1.tar.xz" \
@@ -342,7 +343,7 @@ BuildLoongGLIBC() {
       fi
       return 1
     fi
-    
+
     rm -rf gcc8-loong64-abi1.0
     mkdir gcc8-loong64-abi1.0
     if ! tar -Jxf gcc8-loong64-abi1.0.tar.xz -C gcc8-loong64-abi1.0 --strip-components=1; then
@@ -350,16 +351,16 @@ BuildLoongGLIBC() {
       return 1
     fi
     rm gcc8-loong64-abi1.0.tar.xz
-    
+
     # Setup separate cache directory for ABI1.0 to avoid cache pollution
     abi1_cache_dir="$(pwd)/go-loong64-abi1.0-cache"
     mkdir -p "$abi1_cache_dir"
     echo "Using separate cache directory for ABI1.0: $abi1_cache_dir"
-    
+
     # Use patched Go compiler for old-world build (critical for ABI1.0 compatibility)
     echo "Building with patched Go compiler for old-world ABI1.0..."
     echo "Using isolated cache directory: $abi1_cache_dir"
-    
+
     # Use env command to set environment variables locally without affecting global environment
     if ! env GOOS=linux GOARCH=loong64 \
         CC="$(pwd)/gcc8-loong64-abi1.0/bin/loongarch64-linux-gnu-gcc" \
@@ -379,7 +380,7 @@ BuildLoongGLIBC() {
         echo "Error: Build failed again after cache cleanup"
         echo "Build environment details:"
         echo "GOOS=linux"
-        echo "GOARCH=loong64" 
+        echo "GOARCH=loong64"
         echo "CC=$(pwd)/gcc8-loong64-abi1.0/bin/loongarch64-linux-gnu-gcc"
         echo "CXX=$(pwd)/gcc8-loong64-abi1.0/bin/loongarch64-linux-gnu-g++"
         echo "CGO_ENABLED=1"
@@ -404,7 +405,7 @@ BuildLoongGLIBC() {
       fi
       return 1
     fi
-    
+
     rm -rf gcc12-loong64-abi2.0
     mkdir gcc12-loong64-abi2.0
     if ! tar -Jxf gcc12-loong64-abi2.0.tar.xz -C gcc12-loong64-abi2.0 --strip-components=1; then
@@ -412,13 +413,13 @@ BuildLoongGLIBC() {
       return 1
     fi
     rm gcc12-loong64-abi2.0.tar.xz
-    
+
     export GOOS=linux
     export GOARCH=loong64
     export CC=$(pwd)/gcc12-loong64-abi2.0/bin/loongarch64-unknown-linux-gnu-gcc
     export CXX=$(pwd)/gcc12-loong64-abi2.0/bin/loongarch64-unknown-linux-gnu-g++
     export CGO_ENABLED=1
-    
+
     # Use standard Go compiler for new-world build
     echo "Building with standard Go compiler for new-world ABI2.0..."
     if ! go build -a -o "$output_file" -ldflags="$ldflags" -tags="$loong_tags" .; then
@@ -442,20 +443,19 @@ BuildLoongGLIBC() {
 }
 
 BuildReleaseLinuxMusl() {
-  rm -rf .git/
   mkdir -p "build"
   muslflags="$(GetMuslStaticLdflags)"
   BASE="https://github.com/OpenListTeam/musl-compilers/releases/latest/download/"
   # Keep mips-family targets enabled; sqlite driver selection is handled by Go build tags.
-  FILES=(x86_64-linux-musl-cross aarch64-linux-musl-cross mips-linux-musl-cross mips64-linux-musl-cross mips64el-linux-musl-cross mipsel-linux-musl-cross powerpc64le-linux-musl-cross s390x-linux-musl-cross loongarch64-linux-musl-cross)
+  FILES=(x86_64-linux-musl-cross aarch64-linux-musl-cross)
   for i in "${FILES[@]}"; do
     url="${BASE}${i}.tgz"
     curl -fsSL -o "${i}.tgz" "${url}"
     sudo tar xf "${i}.tgz" --strip-components 1 -C /usr/local
     rm -f "${i}.tgz"
   done
-  OS_ARCHES=(linux-musl-amd64 linux-musl-arm64 linux-musl-mips linux-musl-mips64 linux-musl-mips64le linux-musl-mipsle linux-musl-ppc64le linux-musl-s390x linux-musl-loong64)
-  CGO_ARGS=(x86_64-linux-musl-gcc aarch64-linux-musl-gcc mips-linux-musl-gcc mips64-linux-musl-gcc mips64el-linux-musl-gcc mipsel-linux-musl-gcc powerpc64le-linux-musl-gcc s390x-linux-musl-gcc loongarch64-linux-musl-gcc)
+  OS_ARCHES=(linux-musl-amd64 linux-musl-arm64)
+  CGO_ARGS=(x86_64-linux-musl-gcc aarch64-linux-musl-gcc)
   for i in "${!OS_ARCHES[@]}"; do
     os_arch=${OS_ARCHES[$i]}
     cgo_cc=${CGO_ARGS[$i]}
@@ -471,7 +471,6 @@ BuildReleaseLinuxMusl() {
 }
 
 BuildReleaseLinuxMuslArm() {
-  rm -rf .git/
   mkdir -p "build"
   muslflags="$(GetMuslStaticLdflags)"
   BASE="https://github.com/OpenListTeam/musl-compilers/releases/latest/download/"
