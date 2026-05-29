@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/bootstrap/patch"
+	"github.com/OpenListTeam/OpenList/v4/internal/bootstrap/patch/v3_24_0"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 )
@@ -71,4 +72,5 @@ func InitUpgradePatch() {
 			}
 		}
 	}
+	v3_24_0.HashPwdForOldVersion()
 }

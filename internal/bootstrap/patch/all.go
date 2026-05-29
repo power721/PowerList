@@ -17,7 +17,7 @@ type VersionPatches struct {
 
 var UpgradePatches = []VersionPatches{
 	{
-		Version: "v4.2.0",
+		Version: "v2.24.0",
 		Patches: []func(){
 			v3_24_0.HashPwdForOldVersion,
 		},
