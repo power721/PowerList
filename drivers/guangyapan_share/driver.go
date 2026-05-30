@@ -275,7 +275,7 @@ func (d *GuangYaPanShare) restoreShare(ctx context.Context, account *guangyapan.
 	body := map[string]any{
 		"accessToken": d.ShareAccessToken,
 		"fileIds":     []string{fileID},
-		"parentId":    strings.TrimSpace(account.RootFolderID),
+		"parentId":    strings.TrimSpace(account.TempDirId),
 	}
 	var out restoreShareResp
 	if err := d.postAccountAPI(ctx, account, "/nd.bizuserres.s/v1/restore_share", body, &out); err != nil {

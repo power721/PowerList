@@ -11,13 +11,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/go-resty/resty/v2"
+	log "github.com/sirupsen/logrus"
 )
 
 type GuangYaPan struct {
@@ -26,6 +28,8 @@ type GuangYaPan struct {
 
 	accountClient *resty.Client
 	apiClient     *resty.Client
+
+	TempDirId string
 }
 
 const (
@@ -460,6 +464,24 @@ func (d *GuangYaPan) validateToken(ctx context.Context) error {
 	}
 	if resp.IsError() || strings.TrimSpace(me.Sub) == "" {
 		return fmt.Errorf("validate token failed: %s", d.accountErr("", "", resp))
+	}
+	name := conf.TempDirName
+	dir := &model.Object{
+		ID: d.RootFolderID,
+	}
+	err = d.MakeDir(ctx, dir, name)
+	if err == nil {
+		files, err := d.List(ctx, dir, model.ListArgs{})
+		if err != nil {
+			log.Warnf("list dir failed: %v", err)
+		}
+		for _, file := range files {
+			if file.GetName() == name {
+				d.TempDirId = file.GetID()
+			}
+		}
+	} else {
+		log.Warnf("create temp dir failed: %v", err)
 	}
 	return nil
 }
