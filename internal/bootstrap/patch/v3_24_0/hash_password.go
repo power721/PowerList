@@ -4,6 +4,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	log "github.com/sirupsen/logrus"
 )
 
 // HashPwdForOldVersion encode passwords using SHA256
@@ -17,6 +18,7 @@ func HashPwdForOldVersion() {
 	for i := range users {
 		user := users[i]
 		if user.PwdHash == "" {
+			log.Infof("Hash user password: %v", user.Username)
 			user.SetPassword(user.Password)
 			user.Password = ""
 			if err := db.UpdateUser(&user); err != nil {
