@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	stdpath "path"
+	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -16,20 +17,45 @@ var baiduPanBaseURL = "https://pan.baidu.com"
 
 func (d *BaiduNetdisk) createTempDir() error {
 	d.TempDirId = "/"
-	err := d.createDirectory(stdpath.Join("/", conf.TempDirName), true)
-	if err != nil {
-		log.Warnf("create temp dir failed: %v", err)
-	}
 
 	files, err := d.getFiles("/")
 	if err != nil {
 		return err
 	}
 
+	tempFolders := make([]model.Obj, 0)
 	for _, file := range files {
 		if file.ServerFilename == conf.TempDirName {
 			d.TempDirId = file.Path
-			break
+		} else if strings.HasPrefix(file.ServerFilename, conf.TempDirName) {
+			tempFolders = append(tempFolders, fileToObj(file))
+		}
+	}
+
+	go func() {
+		for _, file := range tempFolders {
+			log.Infof("Delete Baidu temp dir: %s", file.GetPath())
+			d.Delete(file)
+		}
+	}()
+
+	if d.TempDirId == "/" {
+		path := stdpath.Join("/", conf.TempDirName)
+		err = d.createDirectory(path, true)
+		if err != nil {
+			log.Warnf("create temp dir failed: %v", err)
+		}
+
+		files, err := d.getFiles("/")
+		if err != nil {
+			return err
+		}
+
+		for _, file := range files {
+			if file.ServerFilename == conf.TempDirName {
+				d.TempDirId = file.Path
+				break
+			}
 		}
 	}
 
