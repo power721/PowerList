@@ -72,9 +72,11 @@ func (d *GuangYaPan) Init(ctx context.Context) error {
 		SetBaseURL(accountBaseURL).
 		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Content-Type", "application/json").
+		SetHeader("Origin", "https://www.guangyapan.com").
+		SetHeader("Referer", "https://www.guangyapan.com/").
 		SetHeader("X-Device-Model", "chrome%2F147.0.0.0").
 		SetHeader("X-Device-Name", "PC-Chrome").
-		SetHeader("X-Device-Sign", "wdi10."+d.DeviceID+"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx").
+		SetHeader("X-Device-Sign", "wdi10."+d.DeviceID+randomHex(16)).
 		SetHeader("X-Net-Work-Type", "NONE").
 		SetHeader("X-OS-Version", "MacIntel").
 		SetHeader("X-Platform-Version", "1").
@@ -92,6 +94,8 @@ func (d *GuangYaPan) Init(ctx context.Context) error {
 		SetBaseURL(apiBaseURL).
 		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Content-Type", "application/json").
+		SetHeader("Origin", "https://www.guangyapan.com").
+		SetHeader("Referer", "https://www.guangyapan.com/").
 		SetHeader("Did", d.DeviceID).
 		SetHeader("Dt", "4")
 
@@ -488,6 +492,7 @@ func (d *GuangYaPan) refreshToken(ctx context.Context) error {
 	var out tokenResp
 	resp, err := d.accountClient.R().
 		SetContext(ctx).
+		SetHeader("X-Action", "401").
 		SetBody(map[string]any{
 			"client_id":     d.ClientID,
 			"grant_type":    "refresh_token",
@@ -899,6 +904,7 @@ func normalizePhoneE164(phone string) string {
 
 func normalizeDeviceID(v string) string {
 	v = strings.ToLower(strings.TrimSpace(v))
+	v = strings.TrimPrefix(v, "wdi10.")
 	v = strings.ReplaceAll(v, "-", "")
 	if len(v) != 32 {
 		return ""
@@ -912,9 +918,13 @@ func normalizeDeviceID(v string) string {
 }
 
 func randomDeviceID() string {
-	b := make([]byte, 16)
+	return randomHex(16)
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		return "0123456789abcdef0123456789abcdef"
+		return strings.Repeat("0", n*2)
 	}
 	return hex.EncodeToString(b)
 }

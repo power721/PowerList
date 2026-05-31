@@ -428,6 +428,8 @@ func newBizClient(deviceID, accessToken string) *resty.Client {
 		SetBaseURL(guangYaPanAPIBaseURL).
 		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Content-Type", "application/json").
+		SetHeader("Origin", "https://www.guangyapan.com").
+		SetHeader("Referer", "https://www.guangyapan.com/").
 		SetHeader("Did", deviceID).
 		SetHeader("Dt", "4")
 	if accessToken != "" {
@@ -527,7 +529,6 @@ func isShareTokenMessage(msg string) bool {
 func normalizeDeviceID(v string) string {
 	v = strings.ToLower(strings.TrimSpace(v))
 	v = strings.TrimPrefix(v, "wdi10.")
-	v = strings.TrimRight(v, "x")
 	v = strings.ReplaceAll(v, "-", "")
 	if len(v) != 32 {
 		return ""
