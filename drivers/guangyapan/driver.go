@@ -2,7 +2,10 @@ package guangyapan
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -380,26 +383,61 @@ func (d *GuangYaPan) Put(ctx context.Context, dstDir model.Obj, file model.FileS
 		parentID = ""
 	}
 
-	token, code, err := d.getUploadToken(ctx, parentID, name, file.GetSize())
+	fileSize := file.GetSize()
+
+	// Small files (<1MB): cache + compute MD5 for direct upload
+	if fileSize > 0 && fileSize < 1024*1024 {
+		cached, err := file.CacheFullAndWriter(nil, nil)
+		if err != nil {
+			return nil, fmt.Errorf("cache file failed: %w", err)
+		}
+		if _, err := cached.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		hash := md5.New()
+		if _, err := io.Copy(hash, cached); err != nil {
+			return nil, fmt.Errorf("compute md5 failed: %w", err)
+		}
+		md5Str := base64.StdEncoding.EncodeToString(hash.Sum(nil))
+		if _, err := cached.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+
+		token, code, err := d.getUploadToken(ctx, parentID, name, fileSize, md5Str)
+		if err != nil {
+			return nil, err
+		}
+		taskID := strings.TrimSpace(token.TaskID)
+		if code == 156 {
+			return d.waitUploadResult(ctx, taskID, name, file)
+		}
+		return d.waitUploadResult(ctx, taskID, name, file)
+	}
+
+	token, code, err := d.getUploadToken(ctx, parentID, name, fileSize, "")
 	if err != nil {
 		return nil, err
 	}
 	taskID := strings.TrimSpace(token.TaskID)
 	if code == 156 {
-		obj, err := d.waitUploadTaskInfo(ctx, taskID)
-		if err != nil {
-			return nil, err
+		return d.waitUploadResult(ctx, taskID, name, file)
+	}
+
+	// Try flash upload for large files
+	if fileSize >= 1024*1024 && taskID != "" {
+		cached, err := file.CacheFullAndWriter(nil, nil)
+		if err == nil && cached != nil {
+			if _, err := cached.Seek(0, io.SeekStart); err == nil {
+				gcid, gcidErr := calculateGCID(cached, fileSize)
+				if gcidErr == nil {
+					canFlash, flashErr := d.checkFlashUpload(ctx, taskID, gcid)
+					if flashErr == nil && canFlash {
+						return d.waitUploadResult(ctx, taskID, name, file)
+					}
+				}
+			}
+			cached.Seek(0, io.SeekStart)
 		}
-		if obj == nil {
-			obj = &model.Object{}
-		}
-		return &model.Object{
-			ID:       obj.GetID(),
-			Name:     name,
-			Size:     file.GetSize(),
-			Modified: file.ModTime(),
-			Ctime:    file.CreateTime(),
-		}, nil
 	}
 
 	if token.ObjectPath == "" || token.BucketName == "" || token.EndPoint == "" || token.AccessKeyID == "" || token.SecretAccessKey == "" {
@@ -435,6 +473,18 @@ func (d *GuangYaPan) Put(ctx context.Context, dstDir model.Obj, file model.FileS
 		}, nil
 	}
 
+	return d.waitUploadResult(ctx, taskID, name, file)
+}
+
+func (d *GuangYaPan) waitUploadResult(ctx context.Context, taskID, name string, file model.FileStreamer) (model.Obj, error) {
+	if taskID == "" {
+		return &model.Object{
+			Name:     name,
+			Size:     file.GetSize(),
+			Modified: file.ModTime(),
+			Ctime:    file.CreateTime(),
+		}, nil
+	}
 	obj, err := d.waitUploadTaskInfo(ctx, taskID)
 	if err != nil {
 		return nil, err
@@ -742,15 +792,19 @@ func (d *GuangYaPan) waitTaskDone(ctx context.Context, taskID string) error {
 	return fmt.Errorf("task %s timeout", taskID)
 }
 
-func (d *GuangYaPan) getUploadToken(ctx context.Context, parentID, name string, size int64) (*uploadTokenData, int, error) {
+func (d *GuangYaPan) getUploadToken(ctx context.Context, parentID, name string, size int64, md5Val string) (*uploadTokenData, int, error) {
 	var out uploadTokenResp
+	res := map[string]any{
+		"fileSize": size,
+	}
+	if md5Val != "" {
+		res["md5"] = md5Val
+	}
 	err := d.postAPI(ctx, "/userres/v1/get_res_center_token", map[string]any{
 		"capacity": 2,
 		"name":     name,
 		"parentId": parentID,
-		"res": map[string]any{
-			"fileSize": size,
-		},
+		"res":      res,
 	}, &out)
 	if err != nil {
 		return nil, 0, err
@@ -964,6 +1018,57 @@ func calcUploadPartSize(size int64) int64 {
 	}
 }
 
+type flashUploadResp struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		CanFlashUpload bool `json:"canFlashUpload"`
+	} `json:"data"`
+}
+
+func (d *GuangYaPan) checkFlashUpload(ctx context.Context, taskID, gcid string) (bool, error) {
+	var out flashUploadResp
+	if err := d.postAPI(ctx, "/nd.bizuserres.s/v1/check_can_flash_upload", map[string]any{
+		"taskId": taskID,
+		"gcid":   gcid,
+	}, &out); err != nil {
+		return false, err
+	}
+	return out.Data.CanFlashUpload, nil
+}
+
+func calculateGCID(r io.ReadSeeker, fileSize int64) (string, error) {
+	var chunkSize int64
+	switch {
+	case fileSize <= 0x8000000:
+		chunkSize = 256 * 1024
+	case fileSize <= 0x10000000:
+		chunkSize = 512 * 1024
+	case fileSize <= 0x20000000:
+		chunkSize = 1024 * 1024
+	default:
+		chunkSize = 2 * 1024 * 1024
+	}
+
+	hashes := make([]byte, 0)
+	buf := make([]byte, chunkSize)
+	for {
+		n, err := io.ReadFull(r, buf)
+		if n > 0 {
+			h := sha1.Sum(buf[:n])
+			hashes = append(hashes, h[:]...)
+		}
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	finalHash := sha1.Sum(hashes)
+	return strings.ToUpper(hex.EncodeToString(finalHash[:])), nil
+}
+
 var _ driver.Driver = (*GuangYaPan)(nil)
 var _ driver.Mkdir = (*GuangYaPan)(nil)
 var _ driver.Rename = (*GuangYaPan)(nil)
@@ -971,3 +1076,79 @@ var _ driver.Move = (*GuangYaPan)(nil)
 var _ driver.Copy = (*GuangYaPan)(nil)
 var _ driver.Remove = (*GuangYaPan)(nil)
 var _ driver.PutResult = (*GuangYaPan)(nil)
+
+// Cloud download
+
+func (d *GuangYaPan) OfflineDownload(ctx context.Context, fileUrl string, parentDir model.Obj, fileName string) (*OfflineTask, error) {
+	if err := d.ensureAccessToken(ctx); err != nil {
+		return nil, err
+	}
+
+	parentID := parentDir.GetID()
+	if parentID == d.RootFolderID {
+		parentID = ""
+	}
+
+	// resolve the URL first
+	var resolveOut cloudResolveResp
+	if err := d.postAPI(ctx, "/nd.bizcloudcollection.s/v1/resolve_res", map[string]any{
+		"url": fileUrl,
+	}, &resolveOut); err != nil {
+		return nil, fmt.Errorf("resolve url failed: %w", err)
+	}
+
+	// create download task
+	var out cloudCreateTaskResp
+	if err := d.postAPI(ctx, "/nd.bizcloudcollection.s/v1/create_task", map[string]any{
+		"url":      fileUrl,
+		"parentId": parentID,
+	}, &out); err != nil {
+		return nil, fmt.Errorf("create cloud download task failed: %w", err)
+	}
+	if !strings.EqualFold(strings.TrimSpace(out.Msg), "success") {
+		return nil, fmt.Errorf("create cloud download task failed: %s", strings.TrimSpace(out.Msg))
+	}
+	taskID := strings.TrimSpace(out.Data.TaskID)
+	if taskID == "" {
+		return nil, errors.New("create cloud download task failed: empty task id")
+	}
+	return &OfflineTask{
+		TaskID:   taskID,
+		URL:      fileUrl,
+		ParentID: parentID,
+	}, nil
+}
+
+func (d *GuangYaPan) OfflineList(ctx context.Context, nextPageToken string) ([]OfflineTask, error) {
+	if err := d.ensureAccessToken(ctx); err != nil {
+		return nil, err
+	}
+
+	res := make([]OfflineTask, 0)
+	for page := 0; ; page++ {
+		var out cloudTaskListResp
+		if err := d.postAPI(ctx, "/nd.bizcloudcollection.s/v1/list_task", map[string]any{
+			"page":     page,
+			"pageSize": 200,
+			"status":   []int{0, 1, 3, 4},
+		}, &out); err != nil {
+			return nil, err
+		}
+		if !strings.EqualFold(strings.TrimSpace(out.Msg), "success") && out.Code != 0 {
+			return nil, fmt.Errorf("list cloud tasks failed: %s", strings.TrimSpace(out.Msg))
+		}
+		res = append(res, out.Data.List...)
+		if len(out.Data.List) < 200 {
+			break
+		}
+		if out.Data.Total > 0 && len(res) >= out.Data.Total {
+			break
+		}
+	}
+	return res, nil
+}
+
+func (d *GuangYaPan) DeleteOfflineTasks(ctx context.Context, taskIDs []string, deleteFiles bool) error {
+	// no delete API available in reference client
+	return nil
+}

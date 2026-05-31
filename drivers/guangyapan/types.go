@@ -1,6 +1,9 @@
 package guangyapan
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type tokenResp struct {
 	AccessToken  string `json:"access_token"`
@@ -129,4 +132,45 @@ func unixOrZero(v int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(v, 0)
+}
+
+// Cloud download
+
+type OfflineTask struct {
+	TaskID   string `json:"taskId"`
+	TaskName string `json:"taskName"`
+	Status   int    `json:"status"`
+	Progress int64  `json:"progress"`
+	FileSize int64  `json:"fileSize"`
+	URL      string `json:"url"`
+	FileID   string `json:"fileId"`
+	ParentID string `json:"parentId"`
+	CTime    int64  `json:"ctime"`
+}
+
+func (t *OfflineTask) GetID() string {
+	return t.TaskID
+}
+
+type cloudTaskListResp struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		Total int           `json:"total"`
+		List  []OfflineTask `json:"list"`
+	} `json:"data"`
+}
+
+type cloudResolveResp struct {
+	Code int             `json:"code"`
+	Msg  string          `json:"msg"`
+	Data json.RawMessage `json:"data"`
+}
+
+type cloudCreateTaskResp struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		TaskID string `json:"taskId"`
+	} `json:"data"`
 }
