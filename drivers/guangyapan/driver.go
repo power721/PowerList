@@ -12,14 +12,12 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
-	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/go-resty/resty/v2"
-	log "github.com/sirupsen/logrus"
 )
 
 type GuangYaPan struct {
@@ -153,7 +151,7 @@ func (d *GuangYaPan) List(ctx context.Context, dir model.Obj, args model.ListArg
 			"sortType":  d.SortType,
 			"fileTypes": []int{},
 		}
-		if err := d.postAPI(ctx, "/nd.bizuserres.s/v1/file/get_file_list", body, &resp); err != nil {
+		if err := d.postAPI(ctx, "/userres/v1/file/get_file_list", body, &resp); err != nil {
 			return nil, err
 		}
 		for _, item := range resp.Data.List {
@@ -186,7 +184,7 @@ func (d *GuangYaPan) Link(ctx context.Context, file model.Obj, args model.LinkAr
 	}
 
 	var resp downloadResp
-	if err := d.postAPI(ctx, "/nd.bizuserres.s/v1/get_res_download_url", map[string]any{
+	if err := d.postAPI(ctx, "/userres/v1/get_res_download_url", map[string]any{
 		"fileId": file.GetID(),
 	}, &resp); err != nil {
 		return nil, err
@@ -218,7 +216,7 @@ func (d *GuangYaPan) MakeDir(ctx context.Context, parentDir model.Obj, dirName s
 	}
 
 	var out createDirResp
-	if err := d.postAPI(ctx, "/nd.bizuserres.s/v1/file/create_dir", map[string]any{
+	if err := d.postAPI(ctx, "/userres/v1/file/create_dir", map[string]any{
 		"parentId": parentID,
 		"dirName":  name,
 	}, &out); err != nil {
@@ -245,7 +243,7 @@ func (d *GuangYaPan) Rename(ctx context.Context, srcObj model.Obj, newName strin
 	}
 
 	var out commonResp
-	if err := d.postAPI(ctx, "/nd.bizuserres.s/v1/file/rename", map[string]any{
+	if err := d.postAPI(ctx, "/userres/v1/file/rename", map[string]any{
 		"fileId":  fileID,
 		"newName": name,
 	}, &out); err != nil {
@@ -268,7 +266,7 @@ func (d *GuangYaPan) Remove(ctx context.Context, obj model.Obj) error {
 	}
 
 	var del deleteResp
-	if err := d.postAPI(ctx, "/nd.bizuserres.s/v1/file/delete_file", map[string]any{
+	if err := d.postAPI(ctx, "/userres/v1/file/delete_file", map[string]any{
 		"fileIds": []string{fileID},
 	}, &del); err != nil {
 		return err
@@ -298,7 +296,7 @@ func (d *GuangYaPan) Move(ctx context.Context, srcObj, dstDir model.Obj) error {
 	}
 
 	var out deleteResp
-	if err := d.postAPI(ctx, "/nd.bizuserres.s/v1/file/move_file", map[string]any{
+	if err := d.postAPI(ctx, "/userres/v1/file/move_file", map[string]any{
 		"fileIds":  []string{fileID},
 		"parentId": parentID,
 	}, &out); err != nil {
@@ -329,7 +327,7 @@ func (d *GuangYaPan) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
 	}
 
 	var out deleteResp
-	if err := d.postAPI(ctx, "/nd.bizuserres.s/v1/file/copy_file", map[string]any{
+	if err := d.postAPI(ctx, "/userres/v1/file/copy_file", map[string]any{
 		"fileIds":  []string{fileID},
 		"parentId": parentID,
 	}, &out); err != nil {
@@ -465,24 +463,7 @@ func (d *GuangYaPan) validateToken(ctx context.Context) error {
 	if resp.IsError() || strings.TrimSpace(me.Sub) == "" {
 		return fmt.Errorf("validate token failed: %s", d.accountErr("", "", resp))
 	}
-	name := conf.TempDirName
-	dir := &model.Object{
-		ID: d.RootFolderID,
-	}
-	err = d.MakeDir(ctx, dir, name)
-	if err == nil {
-		files, err := d.List(ctx, dir, model.ListArgs{})
-		if err != nil {
-			log.Warnf("list dir failed: %v", err)
-		}
-		for _, file := range files {
-			if file.GetName() == name {
-				d.TempDirId = file.GetID()
-			}
-		}
-	} else {
-		log.Warnf("create temp dir failed: %v", err)
-	}
+	d.createTempDir(ctx)
 	return nil
 }
 
@@ -717,7 +698,7 @@ func (d *GuangYaPan) waitTaskDone(ctx context.Context, taskID string) error {
 	)
 	for i := 0; i < maxTry; i++ {
 		var out taskStatusResp
-		if err := d.postAPI(ctx, "/nd.bizuserres.s/v1/get_task_status", map[string]any{
+		if err := d.postAPI(ctx, "/userres/v1/get_task_status", map[string]any{
 			"taskId": taskID,
 		}, &out); err != nil {
 			return err
@@ -745,7 +726,7 @@ func (d *GuangYaPan) waitTaskDone(ctx context.Context, taskID string) error {
 
 func (d *GuangYaPan) getUploadToken(ctx context.Context, parentID, name string, size int64) (*uploadTokenData, int, error) {
 	var out uploadTokenResp
-	err := d.postAPI(ctx, "/nd.bizuserres.s/v1/get_res_center_token", map[string]any{
+	err := d.postAPI(ctx, "/userres/v1/get_res_center_token", map[string]any{
 		"capacity": 2,
 		"name":     name,
 		"parentId": parentID,
@@ -800,7 +781,7 @@ func (d *GuangYaPan) waitUploadTaskInfo(ctx context.Context, taskID string) (*mo
 	)
 	for i := 0; i < maxTry; i++ {
 		var out taskInfoResp
-		if err := d.postAPI(ctx, "/nd.bizuserres.s/v1/file/get_info_by_task_id", map[string]any{
+		if err := d.postAPI(ctx, "/userres/v1/file/get_info_by_task_id", map[string]any{
 			"taskId": taskID,
 		}, &out); err != nil {
 			return nil, err

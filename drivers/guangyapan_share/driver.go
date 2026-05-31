@@ -20,6 +20,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/go-resty/resty/v2"
+	log "github.com/sirupsen/logrus"
 )
 
 const guangYaPanAPIBaseURL = "https://api.guangyapan.com"
@@ -116,13 +117,13 @@ func (d *GuangYaPanShare) List(ctx context.Context, dir model.Obj, args model.Li
 		if cursor > 0 {
 			body["cursor"] = cursor
 		}
-		if err := d.postShareAPI(ctx, "/nd.bizuserres.s/v1/get_share_page_files_list", body, &out); err != nil {
+		if err := d.postShareAPI(ctx, "/userres/v1/get_share_page_files_list", body, &out); err != nil {
 			if isShareTokenError(err) {
 				if refreshErr := d.getShareAccessToken(ctx); refreshErr != nil {
 					return nil, refreshErr
 				}
 				body["accessToken"] = d.ShareAccessToken
-				if retryErr := d.postShareAPI(ctx, "/nd.bizuserres.s/v1/get_share_page_files_list", body, &out); retryErr != nil {
+				if retryErr := d.postShareAPI(ctx, "/userres/v1/get_share_page_files_list", body, &out); retryErr != nil {
 					return nil, retryErr
 				}
 			} else {
@@ -152,12 +153,14 @@ func (d *GuangYaPanShare) Link(ctx context.Context, file model.Obj, args model.L
 		return nil, errs.NotFile
 	}
 	key := shareLinkCacheKey(d.ShareID, file.GetID())
+	log.Debugf("GuangYaPanShare share: %v %v", d.ShareID, file.GetID())
 	if link, ok := guangYaPanShareLinkCache.Get(key); ok {
 		return link, nil
 	}
 
 	link, err := resolveGuangYaPanShareLink(ctx, d, file, args)
 	if err == nil && link != nil {
+		log.Debugf("GuangYaPanShare link: %v %v", file.GetID(), link.URL)
 		guangYaPanShareLinkCache.Set(key, link)
 	}
 	return link, err
@@ -174,8 +177,12 @@ func (d *GuangYaPanShare) link(ctx context.Context, file model.Obj, args model.L
 			return nil, err
 		}
 	}
+	log.Debugf("ShareAccessToken: %v", d.ShareAccessToken)
+
+	log.Infof("[%v] 获取光鸭文件直链 %v %v %v", account.ID, file.GetName(), file.GetID(), file.GetSize())
 
 	taskID, err := d.restoreShare(ctx, account, file.GetID())
+	log.Debugf("RestoreShare: %v", taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +191,7 @@ func (d *GuangYaPanShare) link(ctx context.Context, file model.Obj, args model.L
 	}
 
 	restored, err := d.resolveRestoredFile(ctx, account, taskID, file)
+	log.Debugf("Restored: %v", restored)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +237,7 @@ func (d *GuangYaPanShare) getShareAccessToken(ctx context.Context) error {
 		d.client = newBizClient(d.DeviceID, "")
 	}
 	var out shareAccessTokenResp
-	if err := d.postShareAPI(ctx, "/nd.bizuserres.s/v1/get_share_access_token", map[string]any{
+	if err := d.postShareAPI(ctx, "/userres/v1/get_share_access_token", map[string]any{
 		"shareId": d.ShareID,
 	}, &out); err != nil {
 		return err
@@ -278,7 +286,7 @@ func (d *GuangYaPanShare) restoreShare(ctx context.Context, account *guangyapan.
 		"parentId":    strings.TrimSpace(account.TempDirId),
 	}
 	var out restoreShareResp
-	if err := d.postAccountAPI(ctx, account, "/nd.bizuserres.s/v1/restore_share", body, &out); err != nil {
+	if err := d.postAccountAPI(ctx, account, "/userres/v1/restore_share", body, &out); err != nil {
 		return "", err
 	}
 	if !strings.EqualFold(strings.TrimSpace(out.Msg), "success") && isShareTokenMessage(out.Msg) {
@@ -286,7 +294,7 @@ func (d *GuangYaPanShare) restoreShare(ctx context.Context, account *guangyapan.
 			return "", err
 		}
 		body["accessToken"] = d.ShareAccessToken
-		if err := d.postAccountAPI(ctx, account, "/nd.bizuserres.s/v1/restore_share", body, &out); err != nil {
+		if err := d.postAccountAPI(ctx, account, "/userres/v1/restore_share", body, &out); err != nil {
 			return "", err
 		}
 	}
@@ -306,7 +314,7 @@ func (d *GuangYaPanShare) waitTaskDone(ctx context.Context, account *guangyapan.
 	)
 	for i := 0; i < maxTry; i++ {
 		var out taskStatusResp
-		if err := d.postAccountAPI(ctx, account, "/nd.bizuserres.s/v1/get_task_status", map[string]any{
+		if err := d.postAccountAPI(ctx, account, "/userres/v1/get_task_status", map[string]any{
 			"taskId": taskID,
 		}, &out); err != nil {
 			return err
@@ -348,6 +356,7 @@ func (d *GuangYaPanShare) resolveRestoredFile(ctx context.Context, account *guan
 		return nil, err
 	}
 	file, ok := findRestoredFile(files, src)
+	log.Debugf("find restored file: %s", file)
 	if !ok {
 		return nil, fmt.Errorf("restored file not found for %s", src.GetName())
 	}
@@ -356,7 +365,7 @@ func (d *GuangYaPanShare) resolveRestoredFile(ctx context.Context, account *guan
 
 func (d *GuangYaPanShare) getTaskFileID(ctx context.Context, account *guangyapan.GuangYaPan, taskID string) (string, error) {
 	var out taskInfoResp
-	if err := d.postAccountAPI(ctx, account, "/nd.bizuserres.s/v1/file/get_info_by_task_id", map[string]any{
+	if err := d.postAccountAPI(ctx, account, "/userres/v1/file/get_info_by_task_id", map[string]any{
 		"taskId": taskID,
 	}, &out); err != nil {
 		return "", err
@@ -421,6 +430,7 @@ func shareLinkCacheKey(shareID, fileID string) string {
 func findRestoredFile(files []model.Obj, target model.Obj) (model.Obj, bool) {
 	targetName := strings.TrimSpace(target.GetName())
 	targetSize := target.GetSize()
+	log.Debugf("find restored file: %s %v", targetName, targetSize)
 	var fallback model.Obj
 	for _, file := range files {
 		if file == nil || file.IsDir() {
