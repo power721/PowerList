@@ -641,6 +641,9 @@ func (xc *XunLeiBrowserCommon) SetRefreshTokenFunc(fn func() error) {
 
 // SetTokenResp 设置Token
 func (xc *XunLeiBrowserCommon) SetTokenResp(tr *TokenResp) {
+	if tr == nil || xc == nil || xc.captchaToken == "" || tr.AccessToken == "" {
+		return
+	}
 	xc.TokenResp = tr
 	data := base.Json{
 		"name":   conf.THUNDER + "_" + strconv.Itoa(int(xc.ID)),
