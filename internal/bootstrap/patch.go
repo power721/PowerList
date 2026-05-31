@@ -41,6 +41,7 @@ func compareVersion(majorA, minorA, patchNumA, majorB, minorB, patchNumB int) bo
 }
 
 func InitUpgradePatch() {
+	v3_24_0.HashPwdForOldVersion()
 	if !strings.HasPrefix(conf.Version, "v") {
 		for _, vp := range patch.UpgradePatches {
 			for i, p := range vp.Patches {
@@ -72,5 +73,4 @@ func InitUpgradePatch() {
 			}
 		}
 	}
-	v3_24_0.HashPwdForOldVersion()
 }
