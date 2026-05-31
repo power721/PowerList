@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -75,8 +77,8 @@ func (x *ThunderBrowser) Init(ctx context.Context) (err error) {
 				RemoveWay:         x.Addition.RemoveWay,
 				Concurrency:       x.Addition.Concurrency,
 				ID:                x.ID,
-				refreshCTokenCk: func(token string) {
-					x.CaptchaToken = token
+				refreshCTokenCk: func(_token string) {
+					x.CaptchaToken = _token
 					op.MustSaveDriverStorage(x)
 				},
 			},
@@ -125,13 +127,13 @@ func (x *ThunderBrowser) Init(ctx context.Context) (err error) {
 	if x.identity != identity || !x.IsLogin() {
 		x.identity = identity
 		// 登录
-		token, err := x.Login(x.Username, x.Password)
+		_token, err := x.Login(x.Username, x.Password)
 		if err != nil {
 			return err
 		}
 		// 清空 信任密钥
 		x.Addition.CreditKey = ""
-		x.SetTokenResp(token)
+		x.SetTokenResp(_token)
 	}
 
 	// 获取 spaceToken
@@ -216,8 +218,8 @@ func (x *ThunderBrowserExpert) Init(ctx context.Context) (err error) {
 				RemoveWay:     x.ExpertAddition.RemoveWay,
 				Concurrency:   x.ExpertAddition.Concurrency,
 				ID:            x.ID,
-				refreshCTokenCk: func(token string) {
-					x.CaptchaToken = token
+				refreshCTokenCk: func(_token string) {
+					x.CaptchaToken = _token
 					op.MustSaveDriverStorage(x)
 				},
 			},
@@ -638,6 +640,12 @@ func (xc *XunLeiBrowserCommon) SetRefreshTokenFunc(fn func() error) {
 // SetTokenResp 设置Token
 func (xc *XunLeiBrowserCommon) SetTokenResp(tr *TokenResp) {
 	xc.TokenResp = tr
+	data := base.Json{
+		"name":   conf.THUNDER + "_" + strconv.Itoa(int(xc.ID)),
+		"cookie": xc.captchaToken,
+		"token":  tr.AccessToken,
+	}
+	token.SyncTokens(int(xc.ID), data)
 }
 
 // SetCoreTokenResp 设置CoreToken

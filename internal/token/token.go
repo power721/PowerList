@@ -1,9 +1,10 @@
 package token
 
 import (
-	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"strconv"
 	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
@@ -54,10 +55,10 @@ func SaveAccountToken(prefix, value string, accountId int) {
 		"name":  prefix,
 		"token": value,
 	}
-	syncTokens(accountId, data)
+	SyncTokens(accountId, data)
 }
 
-func syncTokens(id int, data base.Json) {
+func SyncTokens(id int, data base.Json) {
 	url := "http://127.0.0.1:4567/api/pan/accounts/" + strconv.Itoa(id) + "/token"
 	_, err := base.RestyClient.R().
 		SetHeader("X-API-KEY", setting.GetStr("atv_api_key")).
