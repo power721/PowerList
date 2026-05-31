@@ -19,6 +19,9 @@ type Addition struct {
 	PageSize       int    `json:"page_size" type:"number" default:"100"`
 	OrderBy        int    `json:"order_by" type:"number" default:"3" help:"0:name,1:size,2:create_time,3:update_time"`
 	SortType       int    `json:"sort_type" type:"number" default:"1" help:"0:asc,1:desc"`
+
+	Concurrency int `json:"concurrency" type:"number" default:"10"`
+	ChunkSize   int `json:"chunk_size" type:"number" default:"256"`
 }
 
 var config = driver.Config{

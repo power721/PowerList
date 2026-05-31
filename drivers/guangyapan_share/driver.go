@@ -19,6 +19,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
 )
@@ -159,8 +160,10 @@ func (d *GuangYaPanShare) Link(ctx context.Context, file model.Obj, args model.L
 	}
 
 	link, err := resolveGuangYaPanShareLink(ctx, d, file, args)
+	if err != nil {
+		log.Infof("GuangYaPanShare link error: %v", err)
+	}
 	if err == nil && link != nil {
-		log.Debugf("GuangYaPanShare link: %v %v", file.GetID(), link.URL)
 		guangYaPanShareLinkCache.Set(key, link)
 	}
 	return link, err
@@ -177,37 +180,49 @@ func (d *GuangYaPanShare) link(ctx context.Context, file model.Obj, args model.L
 			return nil, err
 		}
 	}
-	log.Debugf("ShareAccessToken: %v", d.ShareAccessToken)
-
 	log.Infof("[%v] 获取光鸭文件直链 %v %v %v", account.ID, file.GetName(), file.GetID(), file.GetSize())
 
 	taskID, err := d.restoreShare(ctx, account, file.GetID())
-	log.Debugf("RestoreShare: %v", taskID)
+	log.Debugf("RestoreShare task id: %v", taskID)
 	if err != nil {
+		log.Infof("RestoreShare error: %v", err)
 		return nil, err
 	}
+
 	if err := d.waitTaskDone(ctx, account, taskID); err != nil {
+		log.Infof("waitTaskDone error: %v", err)
 		return nil, err
 	}
 
 	restored, err := d.resolveRestoredFile(ctx, account, taskID, file)
-	log.Debugf("Restored: %v", restored)
+	log.Debugf("Restored: %+v", restored)
 	if err != nil {
+		log.Infof("restored error: %v", err)
 		return nil, err
 	}
 
 	link, err := account.Link(ctx, restored, args)
 	if err != nil {
+		log.Infof("link error: %v", err)
 		return nil, err
 	}
 
-	go func(obj model.Obj) {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = account.Remove(cleanupCtx, obj)
-	}(restored)
+	go d.delete(ctx, restored, account)
 
 	return link, nil
+}
+
+func (d *GuangYaPanShare) delete(ctx context.Context, file model.Obj, bd *guangyapan.GuangYaPan) {
+	delayTime := setting.GetInt(conf.DeleteDelayTime, 900)
+	if delayTime == 0 {
+		return
+	}
+
+	delayTime += 5
+
+	log.Infof("[%v] Delete GuangYa temp file %v after %v seconds.", bd.ID, file.GetID(), delayTime)
+	time.Sleep(time.Duration(delayTime) * time.Second)
+	bd.Remove(ctx, file)
 }
 
 func getGuangYaPanAccount(ctx context.Context, idx int) (*guangyapan.GuangYaPan, error) {
@@ -289,6 +304,10 @@ func (d *GuangYaPanShare) restoreShare(ctx context.Context, account *guangyapan.
 	if err := d.postAccountAPI(ctx, account, "/userres/v1/restore_share", body, &out); err != nil {
 		return "", err
 	}
+	if out.Code == 219 {
+		log.Debugf("restore share success: %v", out.Msg)
+		return "", nil
+	}
 	if !strings.EqualFold(strings.TrimSpace(out.Msg), "success") && isShareTokenMessage(out.Msg) {
 		if err := d.getShareAccessToken(ctx); err != nil {
 			return "", err
@@ -308,8 +327,11 @@ func (d *GuangYaPanShare) restoreShare(ctx context.Context, account *guangyapan.
 }
 
 func (d *GuangYaPanShare) waitTaskDone(ctx context.Context, account *guangyapan.GuangYaPan, taskID string) error {
+	if taskID == "" {
+		return nil
+	}
 	const (
-		maxTry   = 40
+		maxTry   = 20
 		interval = 500 * time.Millisecond
 	)
 	for i := 0; i < maxTry; i++ {
@@ -341,22 +363,23 @@ func (d *GuangYaPanShare) waitTaskDone(ctx context.Context, account *guangyapan.
 }
 
 func (d *GuangYaPanShare) resolveRestoredFile(ctx context.Context, account *guangyapan.GuangYaPan, taskID string, src model.Obj) (model.Obj, error) {
-	if fileID, err := d.getTaskFileID(ctx, account, taskID); err == nil && fileID != "" {
-		return &model.Object{
-			ID:       fileID,
-			Name:     src.GetName(),
-			Size:     src.GetSize(),
-			IsFolder: src.IsDir(),
-		}, nil
-	}
+	//if taskID != "" {
+	//	if fileID, err := d.getTaskFileID(ctx, account, taskID); err == nil && fileID != "" {
+	//		return &model.Object{
+	//			ID:       fileID,
+	//			Name:     src.GetName(),
+	//			Size:     src.GetSize(),
+	//			IsFolder: src.IsDir(),
+	//		}, nil
+	//	}
+	//}
 
-	parentID := strings.TrimSpace(account.RootFolderID)
+	parentID := strings.TrimSpace(account.TempDirId)
 	files, err := account.List(ctx, &model.Object{ID: parentID, IsFolder: true}, model.ListArgs{})
 	if err != nil {
 		return nil, err
 	}
 	file, ok := findRestoredFile(files, src)
-	log.Debugf("find restored file: %s", file)
 	if !ok {
 		return nil, fmt.Errorf("restored file not found for %s", src.GetName())
 	}
@@ -370,6 +393,7 @@ func (d *GuangYaPanShare) getTaskFileID(ctx context.Context, account *guangyapan
 	}, &out); err != nil {
 		return "", err
 	}
+	log.Debugf("get task info: %+v", out)
 	return strings.TrimSpace(out.Data.FileID), nil
 }
 
@@ -430,7 +454,7 @@ func shareLinkCacheKey(shareID, fileID string) string {
 func findRestoredFile(files []model.Obj, target model.Obj) (model.Obj, bool) {
 	targetName := strings.TrimSpace(target.GetName())
 	targetSize := target.GetSize()
-	log.Debugf("find restored file: %s %v", targetName, targetSize)
+	log.Debugf("try to find restored file: %s %v", targetName, targetSize)
 	var fallback model.Obj
 	for _, file := range files {
 		if file == nil || file.IsDir() {

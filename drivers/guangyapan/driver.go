@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/go-resty/resty/v2"
 )
@@ -197,7 +199,18 @@ func (d *GuangYaPan) Link(ctx context.Context, file model.Obj, args model.LinkAr
 	if u == "" {
 		return nil, errors.New("empty download url")
 	}
-	return &model.Link{URL: u}, nil
+
+	exp := 1 * time.Hour
+	return &model.Link{
+		Expiration: &exp,
+		URL:        u + fmt.Sprintf("#storageId=%d", d.ID),
+		Header: http.Header{
+			"User-Agent": []string{"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"},
+			"referer":    []string{"https://www.guangyapan.com/"},
+		},
+		Concurrency: d.Concurrency,
+		PartSize:    d.ChunkSize * utils.KB,
+	}, nil
 }
 
 func (d *GuangYaPan) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
