@@ -35,7 +35,8 @@ type ThunderBrowser struct {
 
 	identity string
 
-	TempDirId string
+	TempDirId    string
+	OfflineDirId string
 }
 
 func (x *ThunderBrowser) Config() driver.Config {

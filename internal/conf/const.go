@@ -118,6 +118,7 @@ const (
 	AliTo115         = "ali_to_115"
 	AliAccountId     = "ali_account_id"
 	TempDirName      = "alist-tvbox-temp"
+	OfflineDirName   = "alist-tvbox-offline"
 	DriverRoundRobin = "driver_round_robin"
 	UssQuarkTv       = "use_quark_tv"
 

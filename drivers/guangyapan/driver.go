@@ -32,7 +32,8 @@ type GuangYaPan struct {
 	accountClient *resty.Client
 	apiClient     *resty.Client
 
-	TempDirId string
+	TempDirId    string
+	OfflineDirId string
 }
 
 const (

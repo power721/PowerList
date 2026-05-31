@@ -2,6 +2,7 @@ package thunder_browser
 
 import (
 	"context"
+
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	log "github.com/sirupsen/logrus"
 )
@@ -29,6 +30,32 @@ func (y *ThunderBrowser) createTempDir(ctx context.Context) error {
 	}
 
 	log.Info("Thunder temp folder id: ", y.TempDirId)
+	return nil
+}
+
+func (y *ThunderBrowser) createOfflineDir(ctx context.Context) error {
+	dir := &Files{
+		ID:    "",
+		Space: "",
+	}
+	err := y.MakeDir(ctx, dir, conf.OfflineDirName)
+	if err != nil {
+		log.Warnf("create Thunder offline dir failed: %v", err)
+	}
+
+	files, err := y.getFiles(ctx, dir, "")
+	if err != nil {
+		return err
+	}
+
+	for _, file := range files {
+		if file.GetName() == conf.OfflineDirName {
+			y.OfflineDirId = file.GetID()
+			break
+		}
+	}
+
+	log.Info("Thunder offline folder id: ", y.OfflineDirId)
 	return nil
 }
 

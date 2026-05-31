@@ -47,6 +47,45 @@ func (d *GuangYaPan) createTempDir(ctx context.Context) {
 	d.cleanTempFile(ctx)
 }
 
+func (d *GuangYaPan) createOfflineDir(ctx context.Context) {
+	name := conf.OfflineDirName
+	dir := &model.Object{
+		ID: d.RootFolderID,
+	}
+
+	files, err := d.List(ctx, dir, model.ListArgs{})
+	if err != nil {
+		log.Warnf("list dir failed: %v", err)
+	}
+	for _, file := range files {
+		if file.GetName() == name {
+			d.OfflineDirId = file.GetID()
+			break
+		}
+	}
+
+	if d.OfflineDirId == "" {
+		err = d.MakeDir(ctx, dir, name)
+		if err == nil {
+			files, err := d.List(ctx, dir, model.ListArgs{})
+			if err != nil {
+				log.Warnf("list dir failed: %v", err)
+			}
+			for _, file := range files {
+				if file.GetName() == name {
+					d.OfflineDirId = file.GetID()
+					break
+				}
+			}
+		} else {
+			log.Warnf("create temp dir failed: %v", err)
+		}
+	}
+
+	log.Debugf("GuangYaPan offline: %v", d.OfflineDirId)
+	d.cleanTempFile(ctx)
+}
+
 func (d *GuangYaPan) cleanTempFile(ctx context.Context) {
 	if d.TempDirId == "" {
 		return
