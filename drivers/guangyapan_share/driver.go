@@ -254,6 +254,7 @@ func (d *GuangYaPanShare) getShareAccessToken(ctx context.Context) error {
 	var out shareAccessTokenResp
 	if err := d.postShareAPI(ctx, "/userres/v1/get_share_access_token", map[string]any{
 		"shareId": d.ShareID,
+		"code":    d.SharePwd,
 	}, &out); err != nil {
 		return err
 	}

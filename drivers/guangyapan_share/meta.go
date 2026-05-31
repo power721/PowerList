@@ -11,6 +11,7 @@ import (
 type Addition struct {
 	driver.RootID
 	ShareID          string `json:"share_id" required:"true" help:"光鸭分享ID或完整分享链接"`
+	SharePwd         string `json:"share_pwd"`
 	ShareAccessToken string
 	DeviceID         string `json:"device_id" help:"Optional custom device id (32 hex chars), auto-generated when empty"`
 	PageSize         int    `json:"page_size" type:"number" default:"200"`
