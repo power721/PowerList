@@ -79,6 +79,7 @@ func (x *ThunderBrowser) Init(ctx context.Context) (err error) {
 				ID:                x.ID,
 				refreshCTokenCk: func(_token string) {
 					x.CaptchaToken = _token
+					x.SetTokenResp(x.TokenResp)
 					op.MustSaveDriverStorage(x)
 				},
 			},
@@ -220,6 +221,7 @@ func (x *ThunderBrowserExpert) Init(ctx context.Context) (err error) {
 				ID:            x.ID,
 				refreshCTokenCk: func(_token string) {
 					x.CaptchaToken = _token
+					x.SetTokenResp(x.TokenResp)
 					op.MustSaveDriverStorage(x)
 				},
 			},
