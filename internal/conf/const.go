@@ -115,6 +115,7 @@ const (
 	CLOUD189         = "CLOUD189"
 	BAIDU            = "BAIDU"
 	THUNDER          = "THUNDER"
+	UC_TV            = "UC_TV"
 	AliTo115         = "ali_to_115"
 	AliAccountId     = "ali_account_id"
 	TempDirName      = "alist-tvbox-temp"

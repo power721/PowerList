@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -184,6 +186,13 @@ func (d *QuarkUCTV) getRefreshTokenByTV(ctx context.Context, code string, isRefr
 		d.Addition.RefreshToken = resp.Data.RefreshToken
 		op.MustSaveDriverStorage(d)
 		d.QuarkUCTVCommon.AccessToken = resp.Data.AccessToken
+		token.SaveAccountToken(conf.UC_TV, resp.Data.AccessToken, int(d.ID))
+		data := base.Json{
+			"name":     conf.UC_TV + "_" + strconv.Itoa(int(d.ID)),
+			"username": d.DeviceID,
+			"password": resp.Data.AccessToken,
+		}
+		token.SyncTokens(int(d.ID), data)
 	} else {
 		return errors.New("refresh token is empty")
 	}
