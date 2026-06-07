@@ -45,11 +45,32 @@ func (y *ThunderBrowser) createTempDir(ctx context.Context) error {
 		}
 
 		log.Info("Thunder temp folder id: ", y.TempDirId)
+		y.cleanupTempDir(ctx)
 		return nil
 	}
 	y.TempDirId = transferDir
 	log.Info("Thunder transfer folder id: ", y.TempDirId)
 	return nil
+}
+
+func (y *ThunderBrowser) cleanupTempDir(ctx context.Context) {
+	dir := &Files{
+		ID:    y.TempDirId,
+		Space: "",
+	}
+
+	files, err := y.getFiles(ctx, dir, "")
+	if err != nil {
+		log.Warnf("Thunder list files failed: %v", err)
+		return
+	}
+
+	for _, file := range files {
+		err := y.Remove(ctx, file)
+		if err != nil {
+			log.Warnf("Thunder remove file failed: %v", err)
+		}
+	}
 }
 
 func (y *ThunderBrowser) createOfflineDir(ctx context.Context) error {

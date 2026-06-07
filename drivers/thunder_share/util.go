@@ -100,10 +100,14 @@ func (d *ThunderShare) getDownloadUrl(ctx context.Context, thunder *thunder_brow
 		Space: "",
 	}
 
-	go d.deleteFileDelay(ctx, thunder, file)
+	go d.deleteFileDelay(thunderShareCleanupContext(ctx), thunder, file)
 
 	log.Infof("[%v] get Thunder file link: %v", thunder.ID, fileId)
 	return thunder.Link(ctx, file, args)
+}
+
+func thunderShareCleanupContext(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
 }
 
 func (d *ThunderShare) deleteFileDelay(ctx context.Context, thunder *thunder_browser.ThunderBrowser, file model.Obj) {
