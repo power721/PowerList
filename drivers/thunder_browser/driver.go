@@ -144,6 +144,7 @@ func (x *ThunderBrowser) Init(ctx context.Context) (err error) {
 		return err
 	}
 
+	go x.createTempDir(ctx)
 	return nil
 }
 
