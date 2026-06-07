@@ -2,7 +2,12 @@ package thunder_share
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"strings"
+	"time"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/drivers/thunder_browser"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -11,8 +16,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
-	"net/http"
-	"time"
 )
 
 const (
@@ -23,6 +26,28 @@ const (
 )
 
 var idx = 0
+
+type thunderShareRestoreParams struct {
+	TraceFileIDs string `json:"trace_file_ids"`
+}
+
+type thunderShareRestoreResponse struct {
+	Params thunderShareRestoreParams `json:"params"`
+}
+
+func (r thunderShareRestoreResponse) RestoredFileID(sourceFileID string) (string, bool) {
+	if r.Params.TraceFileIDs == "" {
+		return "", false
+	}
+
+	var traceFileIDs map[string]string
+	if err := json.Unmarshal([]byte(r.Params.TraceFileIDs), &traceFileIDs); err != nil {
+		return "", false
+	}
+
+	fileID := strings.TrimSpace(traceFileIDs[sourceFileID])
+	return fileID, fileID != ""
+}
 
 func (d *ThunderShare) saveFile(ctx context.Context, thunder *thunder_browser.ThunderBrowser, file model.Obj) (string, error) {
 	data := base.Json{
@@ -35,11 +60,16 @@ func (d *ThunderShare) saveFile(ctx context.Context, thunder *thunder_browser.Th
 	}
 
 	log.Debugf("[%v] save Thunder file to folder %v", thunder.ID, thunder.TempDirId)
+	var restoreResp thunderShareRestoreResponse
 	_, err := thunder.Request(SHARE_RESTORE_API_URL, http.MethodPost, func(r *resty.Request) {
 		r.SetBody(data)
-	}, nil)
+	}, &restoreResp)
 	if err != nil {
 		return "", err
+	}
+
+	if fileID, ok := restoreResp.RestoredFileID(file.GetID()); ok {
+		return fileID, nil
 	}
 
 	time.Sleep(500 * time.Millisecond)

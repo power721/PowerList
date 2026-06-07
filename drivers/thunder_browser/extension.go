@@ -2,7 +2,6 @@ package thunder_browser
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 
@@ -15,19 +14,17 @@ func (y *ThunderBrowser) createTempDir(ctx context.Context) error {
 	sleep := time.Second * 2
 	time.Sleep(sleep)
 
+	dir := &Files{
+		ID:    "",
+		Space: "",
+	}
 	for range 10 {
-		dir := &Files{
-			ID:    "",
-			Space: "",
-		}
 		err := y.MakeDir(ctx, dir, conf.TempDirName)
 		if err != nil {
 			log.Warnf("create Thunder temp dir failed: %v", err)
 			if strings.Contains(err.Error(), "captcha_invalid") {
 				time.Sleep(sleep)
 				continue
-			} else {
-				return err
 			}
 		}
 
@@ -52,7 +49,7 @@ func (y *ThunderBrowser) createTempDir(ctx context.Context) error {
 	}
 	y.TempDirId = transferDir
 	log.Info("Thunder transfer folder id: ", y.TempDirId)
-	return errors.New("Thunder temp folder id not found")
+	return nil
 }
 
 func (y *ThunderBrowser) createOfflineDir(ctx context.Context) error {
