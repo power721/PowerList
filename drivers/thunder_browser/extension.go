@@ -11,14 +11,14 @@ import (
 
 func (y *ThunderBrowser) createTempDir(ctx context.Context) error {
 	transferDir := ""
-	sleep := time.Second * 2
+	sleep := time.Second * 3
 	time.Sleep(sleep)
 
 	dir := &Files{
 		ID:    "",
 		Space: "",
 	}
-	for range 10 {
+	for range 5 {
 		err := y.MakeDir(ctx, dir, conf.TempDirName)
 		if err != nil {
 			log.Warnf("create Thunder temp dir failed: %v", err)
