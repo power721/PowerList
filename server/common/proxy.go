@@ -25,29 +25,46 @@ func Proxy(w http.ResponseWriter, r *http.Request, link *model.Link, file model.
 	// }
 
 	if link.Concurrency > 0 || link.PartSize > 0 {
-		attachHeader(w, file, link)
 		size := link.ContentLength
 		if size <= 0 {
 			size = file.GetSize()
 		}
-		rrf, _ := stream.GetRangeReaderFromLink(size, link)
+		rrf, err := stream.GetRangeReaderFromLink(size, link)
+		if err != nil {
+			return err
+		}
 		if link.RangeReader == nil {
 			r = r.WithContext(context.WithValue(r.Context(), conf.RequestHeaderKey, r.Header))
 		}
-		return net.ServeHTTP(w, r, file.GetName(), file.ModTime(), size, &model.RangeReadCloser{
-			RangeReader: rrf,
-		})
+		return proxyRangeReader(w, r, link, file, size, rrf)
 	}
 
 	if link.RangeReader != nil {
-		attachHeader(w, file, link)
 		size := link.ContentLength
 		if size <= 0 {
 			size = file.GetSize()
 		}
-		return net.ServeHTTP(w, r, file.GetName(), file.ModTime(), size, &model.RangeReadCloser{
-			RangeReader: link.RangeReader,
-		})
+		return proxyRangeReader(w, r, link, file, size, link.RangeReader)
+	}
+
+	size := link.ContentLength
+	if size <= 0 {
+		size = file.GetSize()
+	}
+	if size > 0 {
+		rrf, err := stream.GetRangeReaderFromLink(size, link)
+		if err == nil {
+			r = r.WithContext(context.WithValue(r.Context(), conf.RequestHeaderKey, r.Header))
+			detected := stream.DetectObfuscatedMatroska(r.Context(), rrf, size)
+			if detected.Matched {
+				attachHeader(w, file, link)
+				w.Header().Set("Content-Type", detected.ContentType)
+				w.Header().Set("Etag", GetEtag(file, detected.Size))
+				return net.ServeHTTP(w, r, file.GetName(), file.ModTime(), detected.Size, &model.RangeReadCloser{
+					RangeReader: detected.RangeReader,
+				})
+			}
+		}
 	}
 
 	//transparent proxy
@@ -70,6 +87,21 @@ func Proxy(w http.ResponseWriter, r *http.Request, link *model.Link, file model.
 	})
 	return err
 }
+
+func proxyRangeReader(w http.ResponseWriter, r *http.Request, link *model.Link, file model.Obj, size int64, rrf model.RangeReaderIF) error {
+	attachHeader(w, file, link)
+	detected := stream.DetectObfuscatedMatroska(r.Context(), rrf, size)
+	if detected.Matched {
+		rrf = detected.RangeReader
+		size = detected.Size
+		w.Header().Set("Content-Type", detected.ContentType)
+		w.Header().Set("Etag", GetEtag(file, size))
+	}
+	return net.ServeHTTP(w, r, file.GetName(), file.ModTime(), size, &model.RangeReadCloser{
+		RangeReader: rrf,
+	})
+}
+
 func attachHeader(w http.ResponseWriter, file model.Obj, link *model.Link) {
 	fileName := file.GetName()
 	w.Header().Set("Content-Disposition", utils.GenerateContentDisposition(fileName))
