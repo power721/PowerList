@@ -45,6 +45,16 @@ func TestMapPath(t *testing.T) {
 			input:    "/",
 			expected: "/",
 		},
+		{
+			name:     "other emojis pass through unchanged",
+			input:    "/folder😀/file🎉.txt",
+			expected: "/folder😀/file🎉.txt",
+		},
+		{
+			name:     "other emoji at start passes through",
+			input:    "/📁my-folder/file.txt",
+			expected: "/📁my-folder/file.txt",
+		},
 	}
 
 	for _, tt := range tests {

@@ -1,3 +1,6 @@
+// Package alist115 provides data models and indexing support for 115 cloud storage.
+// It enables full-text search across 115 cloud files and directories through
+// bleve indexing and provides API structures for import and search operations.
 package alist115
 
 import "time"
@@ -29,11 +32,10 @@ type ImportBatchResponse struct {
 
 // SearchRequest represents a search request
 type SearchRequest struct {
-	Query    string `json:"query"`              // Search query
-	MaxResults int  `json:"max_results"`        // Maximum number of results to return
-	Offset   int    `json:"offset"`             // Pagination offset
-	DirOnly  bool   `json:"dir_only,omitempty"` // Only return directories
-	FileOnly bool   `json:"file_only,omitempty"` // Only return files
+	Query      string `json:"query"`       // Search query
+	MaxResults int    `json:"max_results"` // Maximum number of results to return
+	Offset     int    `json:"offset"`      // Pagination offset
+	Scope      int    `json:"scope"`       // Search scope: 0=all, 1=folder only, 2=file only
 }
 
 // SearchResponse represents a search response
