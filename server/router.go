@@ -106,6 +106,7 @@ func Init(e *gin.Engine) {
 	_task(auth.Group("/task", middlewares.AuthNotGuest))
 	_sharing(auth.Group("/share", middlewares.AuthNotGuest))
 	admin(auth.Group("/admin", middlewares.AuthAdmin))
+	_alist115(auth.Group("/fs/115"))
 	if flags.Debug || flags.Dev {
 		debug(g.Group("/debug"))
 	}
@@ -246,6 +247,12 @@ func _sharing(g *gin.RouterGroup) {
 	g.POST("/delete", handles.DeleteSharing)
 	g.POST("/enable", handles.SetEnableSharing(false))
 	g.POST("/disable", handles.SetEnableSharing(true))
+}
+
+func _alist115(g *gin.RouterGroup) {
+	g.POST("/import-batch", handles.Alist115ImportBatch)
+	g.Any("/search", handles.Alist115Search)
+	g.DELETE("/clear", handles.Alist115Clear)
 }
 
 func Cors(r *gin.Engine) {
