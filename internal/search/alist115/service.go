@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
+	"github.com/blevesearch/bleve/v2/search/query"
 )
 
 const (
@@ -131,48 +132,64 @@ func (s *Service) Search(req SearchRequest) (*SearchResponse, error) {
 	}
 
 	// Apply defaults and validate pagination
-	if req.MaxResults <= 0 {
-		req.MaxResults = 20
+	if req.Page <= 0 {
+		req.Page = 1
 	}
-	if req.MaxResults > 100 {
-		req.MaxResults = 100
+	if req.PerPage <= 0 {
+		req.PerPage = 20
 	}
-	if req.Offset < 0 {
-		req.Offset = 0
+	if req.PerPage > 100 {
+		req.PerPage = 100
 	}
+
+	// Calculate offset from page number (Page=1 is first page)
+	offset := (req.Page - 1) * req.PerPage
 
 	// Build match query on path field
 	matchQuery := bleve.NewMatchQuery(req.Query)
 	matchQuery.SetField("path")
 
-	searchRequest := bleve.NewSearchRequest(matchQuery)
-	searchRequest.From = req.Offset
-	searchRequest.Size = req.MaxResults
+	// Apply scope filtering if specified
+	var q query.Query = matchQuery
+	if req.Scope == 1 {
+		// Scope 1: folders only (is_dir=true)
+		boolQuery := bleve.NewBooleanQuery()
+		boolQuery.AddMust(matchQuery)
+		isDirQuery := bleve.NewBoolFieldQuery(true)
+		isDirQuery.SetField("is_dir")
+		boolQuery.AddMust(isDirQuery)
+		q = boolQuery
+	} else if req.Scope == 2 {
+		// Scope 2: files only (is_dir=false)
+		boolQuery := bleve.NewBooleanQuery()
+		boolQuery.AddMust(matchQuery)
+		isDirQuery := bleve.NewBoolFieldQuery(false)
+		isDirQuery.SetField("is_dir")
+		boolQuery.AddMust(isDirQuery)
+		q = boolQuery
+	}
+	// Scope 0 or invalid: no filter (all results)
+
+	searchRequest := bleve.NewSearchRequest(q)
+	searchRequest.From = offset
+	searchRequest.Size = req.PerPage
 
 	// Sort by indexed_at descending (most recent first)
 	searchRequest.SortBy([]string{"-indexed_at"})
 
 	// Request specific fields to extract
-	searchRequest.Fields = []string{"path", "name", "size", "is_dir", "indexed_at"}
+	searchRequest.Fields = []string{"path", "name", "size", "is_dir"}
 
 	// Execute search
 	searchResults, err := s.index.Search(searchRequest)
 	if err != nil {
-		return &SearchResponse{
-			Success: false,
-			Query:   req.Query,
-			Total:   0,
-			Results: []SearchNode{},
-			Message: fmt.Sprintf("search failed: %v", err),
-		}, err
+		return nil, fmt.Errorf("search failed: %w", err)
 	}
 
 	// Build result nodes
 	results := make([]SearchNode, 0, len(searchResults.Hits))
 	for _, hit := range searchResults.Hits {
-		node := SearchNode{
-			Score: hit.Score,
-		}
+		node := SearchNode{}
 
 		// Extract fields from hit
 		if path, ok := hit.Fields["path"].(string); ok {
@@ -192,11 +209,9 @@ func (s *Service) Search(req SearchRequest) (*SearchResponse, error) {
 	}
 
 	return &SearchResponse{
-		Success: true,
 		Query:   req.Query,
 		Total:   int(searchResults.Total),
 		Results: results,
-		Message: "success",
 	}, nil
 }
 

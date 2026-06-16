@@ -32,28 +32,23 @@ type ImportBatchResponse struct {
 
 // SearchRequest represents a search request
 type SearchRequest struct {
-	Query      string `json:"query"`       // Search query
-	MaxResults int    `json:"max_results"` // Maximum number of results to return
-	Offset     int    `json:"offset"`      // Pagination offset
-	Scope      int    `json:"scope"`       // Search scope: 0=all, 1=folder only, 2=file only
+	Query   string `json:"query"`    // Search query
+	Page    int    `json:"page"`     // Page number (1-based)
+	PerPage int    `json:"per_page"` // Results per page
+	Scope   int    `json:"scope"`    // Search scope: 0=all, 1=folder only, 2=file only
 }
 
 // SearchResponse represents a search response
 type SearchResponse struct {
-	Success    bool         `json:"success"`     // Whether search succeeded
-	Query      string       `json:"query"`       // Original query
-	Total      int          `json:"total"`       // Total number of results
-	Results    []SearchNode `json:"results"`     // Search results
-	Message    string       `json:"message"`     // Status message
+	Query   string       `json:"query"`   // Original query
+	Total   int          `json:"total"`   // Total number of results
+	Results []SearchNode `json:"results"` // Search results
 }
 
 // SearchNode represents a search result node
 type SearchNode struct {
-	Path       string    `json:"path"`        // Full path
-	Name       string    `json:"name"`        // File/directory name
-	Size       int64     `json:"size"`        // File size in bytes
-	IsDir      bool      `json:"is_dir"`      // Whether this is a directory
-	Modified   time.Time `json:"modified"`    // Last modified time
-	ParentPath string    `json:"parent_path"` // Parent directory path
-	Score      float64   `json:"score"`       // Search relevance score
+	Path  string `json:"path"`   // Full path
+	Name  string `json:"name"`   // File/directory name
+	Size  int64  `json:"size"`   // File size in bytes
+	IsDir bool   `json:"is_dir"` // Whether this is a directory
 }

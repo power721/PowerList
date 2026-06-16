@@ -297,9 +297,9 @@ func TestServiceSearch(t *testing.T) {
 
 	// Search for "侏罗纪"
 	req := SearchRequest{
-		Query:      "侏罗纪",
-		MaxResults: 20,
-		Offset:     0,
+		Query:   "侏罗纪",
+		Page:    1,
+		PerPage: 20,
 	}
 
 	resp, err := service.Search(req)
@@ -310,11 +310,6 @@ func TestServiceSearch(t *testing.T) {
 	// Verify Total >= 2
 	if resp.Total < 2 {
 		t.Errorf("Expected Total >= 2, got %d", resp.Total)
-	}
-
-	// Verify Success flag
-	if !resp.Success {
-		t.Errorf("Expected Success=true, got false")
 	}
 
 	// Verify query is echoed back
@@ -334,9 +329,6 @@ func TestServiceSearch(t *testing.T) {
 		}
 		if node.Name == "" {
 			t.Error("Result node has empty Name")
-		}
-		if node.Score == 0 {
-			t.Error("Result node has zero Score")
 		}
 	}
 }
@@ -375,11 +367,11 @@ func TestServiceSearchPagination(t *testing.T) {
 		t.Fatalf("Expected 5 indexed nodes, got %d", indexed)
 	}
 
-	// Search with MaxResults=2
+	// Search with PerPage=2
 	req := SearchRequest{
-		Query:      "test",
-		MaxResults: 2,
-		Offset:     0,
+		Query:   "test",
+		Page:    1,
+		PerPage: 2,
 	}
 
 	resp, err := service.Search(req)
@@ -395,18 +387,18 @@ func TestServiceSearchPagination(t *testing.T) {
 		t.Errorf("Expected 2 results (pagination), got %d", len(resp.Results))
 	}
 
-	// Search with Offset=2
-	req.Offset = 2
+	// Search with Page=2
+	req.Page = 2
 	resp, err = service.Search(req)
 	if err != nil {
-		t.Fatalf("Search with offset failed: %v", err)
+		t.Fatalf("Search with page 2 failed: %v", err)
 	}
 
 	if resp.Total != 5 {
 		t.Errorf("Expected Total=5, got %d", resp.Total)
 	}
 	if len(resp.Results) != 2 {
-		t.Errorf("Expected 2 results (pagination with offset), got %d", len(resp.Results))
+		t.Errorf("Expected 2 results (pagination with page 2), got %d", len(resp.Results))
 	}
 }
 
@@ -469,6 +461,91 @@ func TestServiceClear(t *testing.T) {
 	}
 	if indexed != 1 {
 		t.Fatalf("Expected 1 indexed node after clear, got %d", indexed)
+	}
+}
+
+// TestServiceSearchScope verifies that scope filtering works correctly
+func TestServiceSearchScope(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "alist115-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tempDir) })
+
+	service, err := NewService(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
+	defer service.Close()
+
+	// Index mixed nodes: 2 folders and 3 files, all with "test" in path
+	nodes := []IndexNode{
+		{Path: "/test/folder1", Name: "folder1", Size: 0, IsDir: true, Modified: time.Now()},
+		{Path: "/test/folder2", Name: "folder2", Size: 0, IsDir: true, Modified: time.Now()},
+		{Path: "/test/file1.txt", Name: "file1.txt", Size: 100, IsDir: false, Modified: time.Now()},
+		{Path: "/test/file2.txt", Name: "file2.txt", Size: 200, IsDir: false, Modified: time.Now()},
+		{Path: "/test/file3.txt", Name: "file3.txt", Size: 300, IsDir: false, Modified: time.Now()},
+	}
+
+	indexed, err := service.BatchIndex(nodes)
+	if err != nil {
+		t.Fatalf("BatchIndex failed: %v", err)
+	}
+	if indexed != 5 {
+		t.Fatalf("Expected 5 indexed nodes, got %d", indexed)
+	}
+
+	// Test Scope 0: all results (default)
+	req := SearchRequest{
+		Query:   "test",
+		Page:    1,
+		PerPage: 20,
+		Scope:   0,
+	}
+
+	resp, err := service.Search(req)
+	if err != nil {
+		t.Fatalf("Search with Scope=0 failed: %v", err)
+	}
+
+	if resp.Total != 5 {
+		t.Errorf("Scope=0: Expected Total=5 (all), got %d", resp.Total)
+	}
+
+	// Test Scope 1: folders only
+	req.Scope = 1
+	resp, err = service.Search(req)
+	if err != nil {
+		t.Fatalf("Search with Scope=1 failed: %v", err)
+	}
+
+	if resp.Total != 2 {
+		t.Errorf("Scope=1: Expected Total=2 (folders only), got %d", resp.Total)
+	}
+
+	// Verify all results are folders
+	for _, node := range resp.Results {
+		if !node.IsDir {
+			t.Errorf("Scope=1: Expected only folders, but got file: %s", node.Path)
+		}
+	}
+
+	// Test Scope 2: files only
+	req.Scope = 2
+	resp, err = service.Search(req)
+	if err != nil {
+		t.Fatalf("Search with Scope=2 failed: %v", err)
+	}
+
+	if resp.Total != 3 {
+		t.Errorf("Scope=2: Expected Total=3 (files only), got %d", resp.Total)
+	}
+
+	// Verify all results are files
+	for _, node := range resp.Results {
+		if node.IsDir {
+			t.Errorf("Scope=2: Expected only files, but got folder: %s", node.Path)
+		}
 	}
 }
 
