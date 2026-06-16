@@ -248,3 +248,227 @@ func TestLargeBatchChunking(t *testing.T) {
 	}
 }
 
+// TestServiceSearch verifies that search returns matching files
+func TestServiceSearch(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "alist115-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tempDir) })
+
+	service, err := NewService(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
+	defer service.Close()
+
+	// Index 3 files: 2 with "侏罗纪", 1 with "other"
+	nodes := []IndexNode{
+		{
+			Path:     "/movies/侏罗纪公园.mp4",
+			Name:     "侏罗纪公园.mp4",
+			Size:     1024000,
+			IsDir:    false,
+			Modified: time.Now(),
+		},
+		{
+			Path:     "/movies/侏罗纪世界.mp4",
+			Name:     "侏罗纪世界.mp4",
+			Size:     2048000,
+			IsDir:    false,
+			Modified: time.Now(),
+		},
+		{
+			Path:     "/movies/other_movie.mp4",
+			Name:     "other_movie.mp4",
+			Size:     512000,
+			IsDir:    false,
+			Modified: time.Now(),
+		},
+	}
+
+	indexed, err := service.BatchIndex(nodes)
+	if err != nil {
+		t.Fatalf("BatchIndex failed: %v", err)
+	}
+	if indexed != 3 {
+		t.Fatalf("Expected 3 indexed nodes, got %d", indexed)
+	}
+
+	// Search for "侏罗纪"
+	req := SearchRequest{
+		Query:      "侏罗纪",
+		MaxResults: 20,
+		Offset:     0,
+	}
+
+	resp, err := service.Search(req)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+
+	// Verify Total >= 2
+	if resp.Total < 2 {
+		t.Errorf("Expected Total >= 2, got %d", resp.Total)
+	}
+
+	// Verify Success flag
+	if !resp.Success {
+		t.Errorf("Expected Success=true, got false")
+	}
+
+	// Verify query is echoed back
+	if resp.Query != "侏罗纪" {
+		t.Errorf("Expected Query='侏罗纪', got '%s'", resp.Query)
+	}
+
+	// Verify results contain data
+	if len(resp.Results) < 2 {
+		t.Errorf("Expected at least 2 results, got %d", len(resp.Results))
+	}
+
+	// Verify result nodes have expected fields
+	for _, node := range resp.Results {
+		if node.Path == "" {
+			t.Error("Result node has empty Path")
+		}
+		if node.Name == "" {
+			t.Error("Result node has empty Name")
+		}
+		if node.Score == 0 {
+			t.Error("Result node has zero Score")
+		}
+	}
+}
+
+// TestServiceSearchPagination verifies that pagination works correctly
+func TestServiceSearchPagination(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "alist115-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tempDir) })
+
+	service, err := NewService(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
+	defer service.Close()
+
+	// Index 5 files with "test"
+	nodes := make([]IndexNode, 5)
+	for i := 0; i < 5; i++ {
+		nodes[i] = IndexNode{
+			Path:     fmt.Sprintf("/test/file%d.txt", i),
+			Name:     fmt.Sprintf("file%d.txt", i),
+			Size:     int64(i * 100),
+			IsDir:    false,
+			Modified: time.Now(),
+		}
+	}
+
+	indexed, err := service.BatchIndex(nodes)
+	if err != nil {
+		t.Fatalf("BatchIndex failed: %v", err)
+	}
+	if indexed != 5 {
+		t.Fatalf("Expected 5 indexed nodes, got %d", indexed)
+	}
+
+	// Search with MaxResults=2
+	req := SearchRequest{
+		Query:      "test",
+		MaxResults: 2,
+		Offset:     0,
+	}
+
+	resp, err := service.Search(req)
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+
+	// Verify Total is 5 but Results only has 2
+	if resp.Total != 5 {
+		t.Errorf("Expected Total=5, got %d", resp.Total)
+	}
+	if len(resp.Results) != 2 {
+		t.Errorf("Expected 2 results (pagination), got %d", len(resp.Results))
+	}
+
+	// Search with Offset=2
+	req.Offset = 2
+	resp, err = service.Search(req)
+	if err != nil {
+		t.Fatalf("Search with offset failed: %v", err)
+	}
+
+	if resp.Total != 5 {
+		t.Errorf("Expected Total=5, got %d", resp.Total)
+	}
+	if len(resp.Results) != 2 {
+		t.Errorf("Expected 2 results (pagination with offset), got %d", len(resp.Results))
+	}
+}
+
+// TestServiceClear verifies that Clear empties the index
+func TestServiceClear(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "alist115-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tempDir) })
+
+	service, err := NewService(tempDir)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
+	defer service.Close()
+
+	// Index some nodes
+	nodes := []IndexNode{
+		{Path: "/test/file1.txt", Name: "file1.txt", Size: 100, IsDir: false, Modified: time.Now()},
+		{Path: "/test/file2.txt", Name: "file2.txt", Size: 200, IsDir: false, Modified: time.Now()},
+	}
+
+	indexed, err := service.BatchIndex(nodes)
+	if err != nil {
+		t.Fatalf("BatchIndex failed: %v", err)
+	}
+	if indexed != 2 {
+		t.Fatalf("Expected 2 indexed nodes, got %d", indexed)
+	}
+
+	// Verify documents are in index
+	docCount, err := service.index.DocCount()
+	if err != nil {
+		t.Fatalf("Failed to get document count: %v", err)
+	}
+	if docCount != 2 {
+		t.Errorf("Expected 2 documents before clear, got %d", docCount)
+	}
+
+	// Clear the index
+	err = service.Clear(tempDir)
+	if err != nil {
+		t.Fatalf("Clear failed: %v", err)
+	}
+
+	// Verify index is empty
+	docCount, err = service.index.DocCount()
+	if err != nil {
+		t.Fatalf("Failed to get document count after clear: %v", err)
+	}
+	if docCount != 0 {
+		t.Errorf("Expected 0 documents after clear, got %d", docCount)
+	}
+
+	// Verify we can still index after clear
+	indexed, err = service.BatchIndex(nodes[:1])
+	if err != nil {
+		t.Fatalf("BatchIndex after clear failed: %v", err)
+	}
+	if indexed != 1 {
+		t.Fatalf("Expected 1 indexed node after clear, got %d", indexed)
+	}
+}
+
