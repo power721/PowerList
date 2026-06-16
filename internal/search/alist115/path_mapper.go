@@ -9,14 +9,16 @@ import (
 // for indexing and search.
 //
 // Supported transformation:
-//   /🏷️我的115分享/ → /我的115分享/
+//
+//	/🏷️我的115分享/ → /我的115分享/
 //
 // Note: Only the specific emoji 🏷️ from webdavsim is handled. Other emojis in paths
 // are intentionally left unchanged as they may be legitimate user content.
 //
 // Example:
-//   MapPath("/🏷️我的115分享/folder/file.txt") → "/我的115分享/folder/file.txt"
-//   MapPath("/other-emoji😀/file.txt")        → "/other-emoji😀/file.txt" (unchanged)
+//
+//	MapPath("/🏷️我的115分享/folder/file.txt") → "/我的115分享/folder/file.txt"
+//	MapPath("/other-emoji😀/file.txt")        → "/other-emoji😀/file.txt" (unchanged)
 func MapPath(path string) string {
 	if path == "" || path == "/" {
 		return path
