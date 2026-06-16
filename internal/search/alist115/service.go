@@ -1,18 +1,24 @@
 package alist115
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"path/filepath"
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
-	"github.com/google/uuid"
+)
+
+const (
+	// maxBatchSize limits the number of documents indexed in a single batch
+	// to prevent memory exhaustion with very large datasets
+	maxBatchSize = 10000
 )
 
 // Service provides bleve-based indexing and search for 115 cloud storage
 type Service struct {
-	index   bleve.Index
-	dataDir string
+	index bleve.Index
 }
 
 // NewService creates or opens a bleve index at dataDir/indexes/115
@@ -36,13 +42,42 @@ func NewService(dataDir string) (*Service, error) {
 	}
 
 	return &Service{
-		index:   index,
-		dataDir: dataDir,
+		index: index,
 	}, nil
 }
 
-// BatchIndex indexes multiple nodes in batch, applying path mapping
+// BatchIndex indexes multiple nodes in batch, applying path mapping.
+// It processes nodes in chunks to prevent memory exhaustion with large datasets.
+// Returns the total number of successfully indexed nodes.
 func (s *Service) BatchIndex(nodes []IndexNode) (int, error) {
+	// Check if index is still open
+	if s.index == nil {
+		return 0, fmt.Errorf("index is closed")
+	}
+
+	totalIndexed := 0
+
+	// Process in chunks to prevent memory exhaustion
+	for i := 0; i < len(nodes); i += maxBatchSize {
+		end := i + maxBatchSize
+		if end > len(nodes) {
+			end = len(nodes)
+		}
+
+		chunk := nodes[i:end]
+		indexed, err := s.indexChunk(chunk)
+		totalIndexed += indexed
+
+		if err != nil {
+			return totalIndexed, fmt.Errorf("failed to index chunk at offset %d: %w", i, err)
+		}
+	}
+
+	return totalIndexed, nil
+}
+
+// indexChunk indexes a single chunk of nodes
+func (s *Service) indexChunk(nodes []IndexNode) (int, error) {
 	batch := s.index.NewBatch()
 	indexed := 0
 
@@ -59,8 +94,8 @@ func (s *Service) BatchIndex(nodes []IndexNode) (int, error) {
 			"indexed_at": time.Now(),
 		}
 
-		// Use UUID as document ID
-		docID := uuid.New().String()
+		// Use deterministic ID based on path for idempotent indexing
+		docID := generateDocID(mappedPath)
 
 		err := batch.Index(docID, doc)
 		if err != nil {
@@ -71,10 +106,19 @@ func (s *Service) BatchIndex(nodes []IndexNode) (int, error) {
 
 	// Execute batch
 	if err := s.index.Batch(batch); err != nil {
-		return indexed, fmt.Errorf("failed to execute batch: %w", err)
+		// Don't count as indexed if batch execution fails
+		return 0, fmt.Errorf("failed to execute batch: %w", err)
 	}
 
 	return indexed, nil
+}
+
+// generateDocID creates a deterministic document ID from a path using SHA-256 hash.
+// This ensures that re-importing the same file updates the existing document
+// instead of creating duplicates.
+func generateDocID(path string) string {
+	hash := sha256.Sum256([]byte(path))
+	return hex.EncodeToString(hash[:])
 }
 
 // Close closes the bleve index
