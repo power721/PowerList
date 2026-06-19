@@ -82,6 +82,67 @@ func TestIndex115LinkBindsRequestBody(t *testing.T) {
 	}
 }
 
+func TestIndex115SearchReturns503WhenSearcherUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	index115Service = stubIndex115HTTPService{err: index115.ErrSearchUnavailable}
+	router.GET("/index115/search", Index115Search)
+
+	req := httptest.NewRequest(http.MethodGet, "/index115/search?q=movie", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var resp common.Resp[any]
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if resp.Code != 503 {
+		t.Fatalf("expected response code 503, got %+v", resp)
+	}
+}
+
+func TestIndex115LinkReturns404ForMissingFile(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	index115Service = stubIndex115HTTPService{err: index115.ErrFileNotFound}
+	router.POST("/index115/link", Index115Link)
+
+	body := `{"cookie":"UID=1;CID=2","share_code":"sw1","file_id":"missing"}`
+	req := httptest.NewRequest(http.MethodPost, "/index115/link", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var resp common.Resp[map[string]any]
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if resp.Code != 404 {
+		t.Fatalf("expected response code 404, got %+v", resp)
+	}
+}
+
+func TestIndex115LinkReturns401ForInvalidCookie(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	index115Service = stubIndex115HTTPService{err: index115.ErrInvalidCookie}
+	router.POST("/index115/link", Index115Link)
+
+	body := `{"cookie":"bad","share_code":"sw1","file_id":"file1"}`
+	req := httptest.NewRequest(http.MethodPost, "/index115/link", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var resp common.Resp[map[string]any]
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if resp.Code != 401 {
+		t.Fatalf("expected response code 401, got %+v", resp)
+	}
+}
+
 type stubIndex115HTTPService struct {
 	browseItems []index115.FileItem
 	searchItems []index115.FileItem

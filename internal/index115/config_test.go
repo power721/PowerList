@@ -49,7 +49,41 @@ func TestNewRuntimeOpensConfiguredManifestIndex(t *testing.T) {
 		t.Fatalf("insert share error = %v", err)
 	}
 
-	store, searcher, err := NewRuntime(context.Background(), dbPath, rootDir)
+	store, searcher, err := NewRuntime(context.Background(), dbPath, filepath.Join(rootDir, "bleve"))
+	if err != nil {
+		t.Fatalf("NewRuntime() error = %v", err)
+	}
+	if store == nil || searcher == nil || searcher.index == nil {
+		t.Fatalf("expected initialized runtime, got store=%v searcher=%v", store, searcher)
+	}
+}
+
+func TestNewRuntimeFallsBackToBleveDirBaseForAbsoluteManifestIndexPath(t *testing.T) {
+	rootDir := t.TempDir()
+	dbPath := filepath.Join(rootDir, "index.db")
+	db := openRuntimeDB(t, dbPath)
+
+	indexDir := filepath.Join(rootDir, "bleve", "index_000001")
+	if err := os.MkdirAll(filepath.Dir(indexDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	index, err := bleve.New(indexDir, bleve.NewIndexMapping())
+	if err != nil {
+		t.Fatalf("bleve.New() error = %v", err)
+	}
+	if err := index.Close(); err != nil {
+		t.Fatalf("index.Close() error = %v", err)
+	}
+
+	manifestPath := filepath.Join("/build-host/indexes", "index_000001")
+	if _, err := db.Exec(`INSERT INTO index_manifest(id, version, index_path, status, built_at, file_count) VALUES (1, 1, ?, 'READY', 1, 1)`, manifestPath); err != nil {
+		t.Fatalf("insert manifest error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO share(share_code, receive_code, share_title, status, last_crawled_at) VALUES ('sw1', 'rc1', 'Share One', 'ACTIVE', 1)`); err != nil {
+		t.Fatalf("insert share error = %v", err)
+	}
+
+	store, searcher, err := NewRuntime(context.Background(), dbPath, filepath.Join(rootDir, "bleve"))
 	if err != nil {
 		t.Fatalf("NewRuntime() error = %v", err)
 	}

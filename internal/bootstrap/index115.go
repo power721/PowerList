@@ -28,9 +28,13 @@ func InitIndex115Service(ctx context.Context) error {
 	if conf.Conf.Index115.DBFile == "" || conf.Conf.Index115.BleveDir == "" {
 		return errors.New("index115 paths not configured")
 	}
-	store, searcher, err := index115.NewRuntime(ctx, conf.Conf.Index115.DBFile, conf.Conf.Index115.BleveDir)
+	store, err := index115.OpenStoreRuntime(ctx, conf.Conf.Index115.DBFile)
 	if err != nil {
 		return err
+	}
+	searcher, err := index115.NewSearcher(ctx, store, conf.Conf.Index115.BleveDir)
+	if err != nil {
+		log.Warnf("index115 search disabled: %+v", err)
 	}
 	delay := time.Duration(index115DeleteDelaySeconds()) * time.Second
 	service := index115.NewService(

@@ -37,7 +37,7 @@ func TestLeaseRegistryRefreshesLease(t *testing.T) {
 func TestLinkResolverResolveSchedulesCleanupWithLease(t *testing.T) {
 	client := &fakeShareDownloadClient{
 		resolvedLink: ResolvedLink{URL: "https://example.com/play", ExpiredIn: 14400},
-		sha1:         "sha1-value",
+		receivedFile: "received-file-1",
 	}
 	resolver := &LinkResolver{
 		client: client,
@@ -62,8 +62,8 @@ func TestLinkResolverResolveSchedulesCleanupWithLease(t *testing.T) {
 
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if len(client.deletedSHA1) != 1 || client.deletedSHA1[0] != "sha1-value" {
-		t.Fatalf("expected cleanup delete call, got %+v", client.deletedSHA1)
+	if len(client.deletedFileIDs) != 1 || client.deletedFileIDs[0] != "received-file-1" {
+		t.Fatalf("expected cleanup delete call, got %+v", client.deletedFileIDs)
 	}
 }
 
@@ -80,19 +80,19 @@ func TestLinkResolverResolveReturnsErrorWhenClientMissing(t *testing.T) {
 }
 
 type fakeShareDownloadClient struct {
-	mu           sync.Mutex
-	resolvedLink ResolvedLink
-	sha1         string
-	deletedSHA1  []string
+	mu             sync.Mutex
+	resolvedLink   ResolvedLink
+	receivedFile   string
+	deletedFileIDs []string
 }
 
-func (f *fakeShareDownloadClient) ResolveShareLink(ctx context.Context, cookie string, shareCode string, receiveCode string, fileID string) (ResolvedLink, string, error) {
-	return f.resolvedLink, f.sha1, nil
+func (f *fakeShareDownloadClient) ResolveShareLink(ctx context.Context, cookie string, shareCode string, receiveCode string, file FileItem) (ResolvedLink, string, error) {
+	return f.resolvedLink, f.receivedFile, nil
 }
 
-func (f *fakeShareDownloadClient) DeleteReceivedBySHA1(ctx context.Context, cookie string, sha1 string) error {
+func (f *fakeShareDownloadClient) DeleteReceivedByFileID(ctx context.Context, cookie string, fileID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.deletedSHA1 = append(f.deletedSHA1, sha1)
+	f.deletedFileIDs = append(f.deletedFileIDs, fileID)
 	return nil
 }

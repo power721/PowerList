@@ -26,7 +26,7 @@ func TestInitIndex115ServiceReturnsErrorWhenManifestMissing(t *testing.T) {
 func TestInitIndex115ServiceUsesConfiguredPaths(t *testing.T) {
 	rootDir := t.TempDir()
 	dbPath := filepath.Join(rootDir, "index.db")
-	bleveRoot := rootDir
+	bleveRoot := filepath.Join(rootDir, "bleve")
 	index, db := newRuntimeFixture(t, rootDir, dbPath)
 	defer func() { _ = db.Close() }()
 	if err := index.Close(); err != nil {
@@ -36,6 +36,27 @@ func TestInitIndex115ServiceUsesConfiguredPaths(t *testing.T) {
 	conf.Conf = conf.DefaultConfig(rootDir)
 	conf.Conf.Index115.DBFile = dbPath
 	conf.Conf.Index115.BleveDir = bleveRoot
+
+	if err := InitIndex115Service(context.Background()); err != nil {
+		t.Fatalf("InitIndex115Service() error = %v", err)
+	}
+}
+
+func TestInitIndex115ServiceDegradesWhenBleveUnavailable(t *testing.T) {
+	rootDir := t.TempDir()
+	dbPath := filepath.Join(rootDir, "index.db")
+	db := openIndex115RuntimeDB(t, dbPath)
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`INSERT INTO index_manifest(id, version, index_path, status, built_at, file_count) VALUES (1, 1, ?, 'READY', 1, 1)`, "bleve/index_000001"); err != nil {
+		t.Fatalf("insert manifest error = %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO share(share_code, receive_code, share_title, status, last_crawled_at) VALUES ('sw1', 'rc1', 'Share One', 'ACTIVE', 1)`); err != nil {
+		t.Fatalf("insert share error = %v", err)
+	}
+
+	conf.Conf = conf.DefaultConfig(rootDir)
+	conf.Conf.Index115.DBFile = dbPath
+	conf.Conf.Index115.BleveDir = filepath.Join(rootDir, "bleve")
 
 	if err := InitIndex115Service(context.Background()); err != nil {
 		t.Fatalf("InitIndex115Service() error = %v", err)

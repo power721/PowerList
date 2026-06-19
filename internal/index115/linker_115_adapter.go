@@ -2,6 +2,7 @@ package index115
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	driver115 "github.com/power721/115driver/pkg/driver"
@@ -36,50 +37,32 @@ func NewDriver115ShareClient() ShareDownloadClient {
 	}
 }
 
-func (c *driver115ShareClient) ResolveShareLink(ctx context.Context, cookie string, shareCode string, receiveCode string, fileID string) (ResolvedLink, string, error) {
+func (c *driver115ShareClient) ResolveShareLink(ctx context.Context, cookie string, shareCode string, receiveCode string, file FileItem) (ResolvedLink, string, error) {
 	client, err := c.factory.NewClient(ctx, cookie)
 	if err != nil {
-		return ResolvedLink{}, "", err
+		return ResolvedLink{}, "", fmt.Errorf("%w: %v", ErrInvalidCookie, err)
 	}
-	link, err := client.DownloadByShareCode(ctx, shareCode, receiveCode, fileID)
+	beforeFiles, _ := listReceiveDirFiles(ctx, client)
+	link, err := client.DownloadByShareCode(ctx, shareCode, receiveCode, file.FileID)
 	if err != nil {
-		return ResolvedLink{}, "", err
+		return ResolvedLink{}, "", fmt.Errorf("%w: %v", ErrLinkResolveFailed, err)
 	}
-	return link, "", nil
+	afterFiles, err := listReceiveDirFiles(ctx, client)
+	if err != nil {
+		return link, "", nil
+	}
+	return link, resolveReceivedFileID(beforeFiles, afterFiles, file), nil
 }
 
-func (c *driver115ShareClient) DeleteReceivedBySHA1(ctx context.Context, cookie string, sha1 string) error {
-	if sha1 == "" {
+func (c *driver115ShareClient) DeleteReceivedByFileID(ctx context.Context, cookie string, fileID string) error {
+	if fileID == "" {
 		return nil
 	}
 	client, err := c.factory.NewClient(ctx, cookie)
 	if err != nil {
 		return err
 	}
-	rootFiles, err := client.ListDir(ctx, "0")
-	if err != nil {
-		return err
-	}
-	receiveDirID := ""
-	for _, file := range rootFiles {
-		if file.IsDir && file.Name == receiveDirName {
-			receiveDirID = file.FileID
-			break
-		}
-	}
-	if receiveDirID == "" {
-		return nil
-	}
-	files, err := client.ListDir(ctx, receiveDirID)
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		if file.Sha1 == sha1 {
-			return client.Delete(ctx, file.FileID)
-		}
-	}
-	return nil
+	return client.Delete(ctx, fileID)
 }
 
 type defaultDriver115Factory struct{}
@@ -137,4 +120,55 @@ func (c *defaultDriver115Client) ListDir(ctx context.Context, dirID string) ([]d
 func (c *defaultDriver115Client) Delete(ctx context.Context, fileID string) error {
 	_ = ctx
 	return c.client.Delete(fileID)
+}
+
+func listReceiveDirFiles(ctx context.Context, client driver115Client) ([]driver115File, error) {
+	rootFiles, err := client.ListDir(ctx, "0")
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range rootFiles {
+		if file.IsDir && file.Name == receiveDirName {
+			return client.ListDir(ctx, file.FileID)
+		}
+	}
+	return nil, nil
+}
+
+func resolveReceivedFileID(beforeFiles, afterFiles []driver115File, target FileItem) string {
+	if len(afterFiles) == 0 {
+		return ""
+	}
+	beforeIDs := make(map[string]struct{}, len(beforeFiles))
+	for _, file := range beforeFiles {
+		beforeIDs[file.FileID] = struct{}{}
+	}
+	candidates := make([]driver115File, 0, len(afterFiles))
+	for _, file := range afterFiles {
+		if _, ok := beforeIDs[file.FileID]; ok {
+			continue
+		}
+		if file.IsDir {
+			continue
+		}
+		candidates = append(candidates, file)
+	}
+	if len(candidates) == 1 {
+		return candidates[0].FileID
+	}
+	if target.SHA1 != "" {
+		for _, file := range candidates {
+			if file.Sha1 == target.SHA1 {
+				return file.FileID
+			}
+		}
+	}
+	if target.Name != "" {
+		for _, file := range candidates {
+			if file.Name == target.Name {
+				return file.FileID
+			}
+		}
+	}
+	return ""
 }

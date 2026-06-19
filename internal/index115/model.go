@@ -30,7 +30,6 @@ type SearchRequest struct {
 	Query     string
 	Page      int
 	PerPage   int
-	Scope     string
 	ShareCode string
 }
 

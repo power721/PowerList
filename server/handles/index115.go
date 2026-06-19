@@ -34,7 +34,7 @@ func Index115Browse(c *gin.Context) {
 		ParentID:    c.Query("parent_id"),
 	})
 	if err != nil {
-		common.ErrorResp(c, err, 400)
+		common.ErrorResp(c, err, index115BrowseErrorCode(err))
 		return
 	}
 	common.SuccessResp(c, items)
@@ -50,15 +50,10 @@ func Index115Search(c *gin.Context) {
 		Query:     c.Query("q"),
 		Page:      parseInt(c.Query("page"), 1),
 		PerPage:   parseInt(c.Query("per_page"), 20),
-		Scope:     c.Query("scope"),
 		ShareCode: c.Query("share_code"),
 	})
 	if err != nil {
-		code := 400
-		if errors.Is(err, index115.ErrEmptyQuery) {
-			code = 400
-		}
-		common.ErrorResp(c, err, code)
+		common.ErrorResp(c, err, index115SearchErrorCode(err))
 		return
 	}
 	common.SuccessResp(c, gin.H{
@@ -81,7 +76,7 @@ func Index115Link(c *gin.Context) {
 	}
 	link, err := index115Service.Link(c.Request.Context(), req)
 	if err != nil {
-		common.ErrorResp(c, err, 400)
+		common.ErrorResp(c, err, index115LinkErrorCode(err))
 		return
 	}
 	common.SuccessResp(c, gin.H{
@@ -99,4 +94,39 @@ func parseInt(raw string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func index115BrowseErrorCode(err error) int {
+	if errors.Is(err, index115.ErrStoreUnavailable) {
+		return 503
+	}
+	return 503
+}
+
+func index115SearchErrorCode(err error) int {
+	switch {
+	case errors.Is(err, index115.ErrEmptyQuery):
+		return 400
+	case errors.Is(err, index115.ErrSearchUnavailable):
+		return 503
+	default:
+		return 503
+	}
+}
+
+func index115LinkErrorCode(err error) int {
+	switch {
+	case errors.Is(err, index115.ErrMissingLinkArg), errors.Is(err, index115.ErrDirectoryLink):
+		return 400
+	case errors.Is(err, index115.ErrFileNotFound):
+		return 404
+	case errors.Is(err, index115.ErrInvalidCookie):
+		return 401
+	case errors.Is(err, index115.ErrStoreUnavailable), errors.Is(err, index115.ErrLinkClientNotConfigured):
+		return 503
+	case errors.Is(err, index115.ErrLinkResolveFailed):
+		return 502
+	default:
+		return 502
+	}
 }

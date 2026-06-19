@@ -33,6 +33,14 @@ func TestServiceSearchRejectsEmptyQuery(t *testing.T) {
 	}
 }
 
+func TestServiceSearchReturnsUnavailableWhenSearcherMissing(t *testing.T) {
+	svc := &Service{}
+	_, _, err := svc.Search(context.Background(), SearchRequest{Query: "movie"})
+	if !errors.Is(err, ErrSearchUnavailable) {
+		t.Fatalf("expected ErrSearchUnavailable, got %v", err)
+	}
+}
+
 func TestServiceLinkRejectsDirectory(t *testing.T) {
 	svc := &Service{
 		store: stubStore{

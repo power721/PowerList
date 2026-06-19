@@ -17,8 +17,8 @@ type ResolvedLink struct {
 }
 
 type ShareDownloadClient interface {
-	ResolveShareLink(ctx context.Context, cookie string, shareCode string, receiveCode string, fileID string) (ResolvedLink, string, error)
-	DeleteReceivedBySHA1(ctx context.Context, cookie string, sha1 string) error
+	ResolveShareLink(ctx context.Context, cookie string, shareCode string, receiveCode string, file FileItem) (ResolvedLink, string, error)
+	DeleteReceivedByFileID(ctx context.Context, cookie string, fileID string) error
 }
 
 type LinkResolver struct {
@@ -40,15 +40,12 @@ func (r *LinkResolver) Resolve(ctx context.Context, req LinkRequest, file FileIt
 		return ResolvedLink{}, ErrLinkClientNotConfigured
 	}
 	receiveCode := r.resolveReceiveCode(req.ReceiveCode, file.ReceiveCode)
-	link, sha1, err := r.client.ResolveShareLink(ctx, req.Cookie, req.ShareCode, receiveCode, file.FileID)
+	link, receivedFileID, err := r.client.ResolveShareLink(ctx, req.Cookie, req.ShareCode, receiveCode, file)
 	if err != nil {
 		return ResolvedLink{}, err
 	}
-	if sha1 == "" {
-		sha1 = file.SHA1
-	}
-	if sha1 != "" {
-		r.scheduleCleanup(req.Cookie, file.FileID, sha1)
+	if receivedFileID != "" {
+		r.scheduleCleanup(req.Cookie, file.FileID, receivedFileID)
 	}
 	return link, nil
 }
@@ -65,7 +62,7 @@ func (r *LinkResolver) leaseKey(cookie, fileID string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (r *LinkResolver) scheduleCleanup(cookie, fileID, sha1 string) {
+func (r *LinkResolver) scheduleCleanup(cookie, fileID, receivedFileID string) {
 	if r.client == nil || r.leases == nil || r.delay <= 0 {
 		return
 	}
@@ -76,7 +73,7 @@ func (r *LinkResolver) scheduleCleanup(cookie, fileID, sha1 string) {
 		if !r.leases.Expired(key, expiresAt) {
 			return
 		}
-		_ = r.client.DeleteReceivedBySHA1(context.Background(), cookie, sha1)
+		_ = r.client.DeleteReceivedByFileID(context.Background(), cookie, receivedFileID)
 	}()
 }
 
