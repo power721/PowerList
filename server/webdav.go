@@ -21,8 +21,12 @@ import (
 var handler *webdav.Handler
 
 func WebDav(dav *gin.RouterGroup) {
+	prefix := "/dav"
+	if conf.URL != nil {
+		prefix = path.Join(conf.URL.Path, "/dav")
+	}
 	handler = &webdav.Handler{
-		Prefix:     path.Join(conf.URL.Path, "/dav"),
+		Prefix:     prefix,
 		LockSystem: webdav.NewMemLS(),
 		Logger: func(request *http.Request, err error) {
 			log.Errorf("%s %s %+v", request.Method, request.URL.Path, err)
@@ -44,10 +48,61 @@ func WebDav(dav *gin.RouterGroup) {
 }
 
 func ServeWebDAV(c *gin.Context) {
+	if isIndex115WebDAVPath(c.Request.URL.Path) {
+		if !index115WebDAVAuthForServe(c) {
+			return
+		}
+		if !index115WebDAVReadOnlyForServe(c) {
+			return
+		}
+		getIndex115DAVHandler().ServeHTTP(c.Writer, c.Request)
+		return
+	}
 	handler.ServeHTTP(c.Writer, c.Request)
 }
 
+func index115WebDAVAuthForServe(c *gin.Context) bool {
+	if c.Request.Method == http.MethodOptions {
+		return true
+	}
+	if conf.Conf == nil {
+		return true
+	}
+	token := setting.GetStr(conf.Token)
+	if token == "" {
+		return true
+	}
+	auth := c.GetHeader("Authorization")
+	if strings.HasPrefix(auth, "Bearer ") {
+		auth = strings.TrimPrefix(auth, "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(auth), []byte(token)) == 1 {
+			return true
+		}
+	}
+	c.Writer.Header()["WWW-Authenticate"] = []string{`Bearer realm="openlist-index115"`}
+	c.Status(http.StatusUnauthorized)
+	c.Abort()
+	return false
+}
+
+func index115WebDAVReadOnlyForServe(c *gin.Context) bool {
+	switch c.Request.Method {
+	case http.MethodOptions, http.MethodGet, http.MethodHead, "PROPFIND":
+		return true
+	default:
+		c.Status(http.StatusForbidden)
+		c.Abort()
+		return false
+	}
+}
+
 func WebDAVAuth(c *gin.Context) {
+	if isIndex115WebDAVPath(c.Request.URL.Path) {
+		if index115WebDAVAuthForServe(c) {
+			c.Next()
+		}
+		return
+	}
 	// check count of login
 	ip := c.ClientIP()
 	guest, _ := op.GetGuest()

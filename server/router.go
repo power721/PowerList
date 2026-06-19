@@ -102,6 +102,7 @@ func Init(e *gin.Engine) {
 	public.Any("/archive_extensions", handles.ArchiveExtensions)
 
 	_fs(auth.Group("/fs"))
+	_index115(auth.Group("/index115"))
 	fsAndShare(api.Group("/fs", middlewares.Auth(true)))
 	_task(auth.Group("/task", middlewares.AuthNotGuest))
 	_sharing(auth.Group("/share", middlewares.AuthNotGuest))
@@ -246,6 +247,12 @@ func _sharing(g *gin.RouterGroup) {
 	g.POST("/delete", handles.DeleteSharing)
 	g.POST("/enable", handles.SetEnableSharing(false))
 	g.POST("/disable", handles.SetEnableSharing(true))
+}
+
+func _index115(g *gin.RouterGroup) {
+	g.GET("/browse", handles.Index115Browse)
+	g.GET("/search", handles.Index115Search)
+	g.POST("/link", handles.Index115Link)
 }
 
 func Cors(r *gin.Engine) {

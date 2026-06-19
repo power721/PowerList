@@ -133,6 +133,8 @@ func InitConfig() {
 	convertAbsPath(&conf.Conf.Log.Name)
 	convertAbsPath(&conf.Conf.TempDir)
 	convertAbsPath(&conf.Conf.BleveDir)
+	convertAbsPath(&conf.Conf.Index115.DBFile)
+	convertAbsPath(&conf.Conf.Index115.BleveDir)
 	convertAbsPath(&conf.Conf.DistDir)
 
 	err := os.MkdirAll(conf.Conf.TempDir, 0o777)

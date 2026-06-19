@@ -106,6 +106,11 @@ type SFTP struct {
 	Listen string `json:"listen" env:"LISTEN"`
 }
 
+type Index115 struct {
+	DBFile   string `json:"db_file" env:"DB_FILE"`
+	BleveDir string `json:"bleve_dir" env:"BLEVE_DIR"`
+}
+
 type Config struct {
 	Force                 bool        `json:"force" env:"FORCE"`
 	SiteURL               string      `json:"site_url" env:"SITE_URL"`
@@ -130,6 +135,7 @@ type Config struct {
 	S3                    S3          `json:"s3" envPrefix:"S3_"`
 	FTP                   FTP         `json:"ftp" envPrefix:"FTP_"`
 	SFTP                  SFTP        `json:"sftp" envPrefix:"SFTP_"`
+	Index115              Index115    `json:"index115" envPrefix:"INDEX115_"`
 	LastLaunchedVersion   string      `json:"last_launched_version"`
 	ProxyAddress          string      `json:"proxy_address" env:"PROXY_ADDRESS"`
 }
@@ -137,6 +143,7 @@ type Config struct {
 func DefaultConfig(dataDir string) *Config {
 	tempDir := filepath.Join(dataDir, "temp")
 	indexDir := filepath.Join(dataDir, "bleve")
+	index115Dir := filepath.Join(dataDir, "index115")
 	logPath := filepath.Join(dataDir, "log/log.log")
 	dbPath := filepath.Join(dataDir, "data.db")
 	return &Config{
@@ -163,6 +170,10 @@ func DefaultConfig(dataDir string) *Config {
 			Index: "openlist",
 		},
 		BleveDir: indexDir,
+		Index115: Index115{
+			DBFile:   filepath.Join(index115Dir, "index.db"),
+			BleveDir: filepath.Join(index115Dir, "bleve"),
+		},
 		Log: LogConfig{
 			Enable:     true,
 			Name:       logPath,

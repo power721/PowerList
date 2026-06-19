@@ -36,6 +36,7 @@ func Init() {
 	data.InitData()
 	InitStreamLimit()
 	InitIndex()
+	InitIndex115()
 	InitUpgradePatch()
 }
 
