@@ -143,7 +143,7 @@ type Config struct {
 func DefaultConfig(dataDir string) *Config {
 	tempDir := filepath.Join(dataDir, "temp")
 	indexDir := filepath.Join(dataDir, "bleve")
-	index115Dir := filepath.Join(dataDir, "index115")
+	index115Dir := filepath.Join("/data", "index115")
 	logPath := filepath.Join(dataDir, "log/log.log")
 	dbPath := filepath.Join(dataDir, "data.db")
 	return &Config{
