@@ -80,6 +80,10 @@ func (s stubStore) FileByID(ctx context.Context, fileID string) (FileItem, bool,
 	return s.file, s.ok, s.err
 }
 
+func (s stubStore) FileWithFullPath(ctx context.Context, fileID string) (FileItem, bool, error) {
+	return s.file, s.ok, s.err
+}
+
 type stubSearcher struct {
 	items []FileItem
 	total int
