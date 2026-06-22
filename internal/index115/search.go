@@ -2,6 +2,7 @@ package index115
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/blevesearch/bleve/v2"
@@ -14,6 +15,12 @@ type Searcher struct {
 }
 
 func (s *Searcher) Search(ctx context.Context, req SearchRequest) ([]FileItem, int, error) {
+	if s == nil {
+		return nil, 0, errors.New("searcher is nil")
+	}
+	if s.index == nil {
+		return nil, 0, errors.New("index is nil")
+	}
 	if req.Page <= 0 {
 		req.Page = 1
 	}

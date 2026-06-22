@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/blevesearch/bleve/v2"
+	log "github.com/sirupsen/logrus"
 
 	_ "github.com/glebarez/go-sqlite"
 )
@@ -42,12 +43,13 @@ func OpenStoreRuntime(ctx context.Context, dbPath string) (*Store, error) {
 }
 
 func NewSearcher(ctx context.Context, store *Store, bleveBaseDir string) (*Searcher, error) {
-	indexPath, err := loadReadyIndexPath(ctx, store.db, bleveBaseDir)
-	if err != nil {
-		return nil, err
-	}
+	//indexPath, err := loadReadyIndexPath(ctx, store.db, bleveBaseDir)
+	//if err != nil {
+	//	return nil, err
+	//}
 
-	index, err := bleve.Open(indexPath)
+	log.Infof("opening searcher at %s", bleveBaseDir)
+	index, err := bleve.Open(bleveBaseDir)
 	if err != nil {
 		return nil, err
 	}
