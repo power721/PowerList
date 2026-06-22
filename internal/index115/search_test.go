@@ -3,6 +3,7 @@ package index115
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -86,32 +87,18 @@ func TestSearcherSearchDropsMissingSQLiteRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
-	if total != 0 {
-		t.Fatalf("expected resolved total 0, got %d", total)
+	// total is the bleve match count; the missing store row is only dropped
+	// from the returned items, not from the total.
+	if total != 1 {
+		t.Fatalf("expected bleve total 1, got %d", total)
 	}
 	if len(items) != 0 {
-		t.Fatalf("expected empty resolved page, got %+v", items)
+		t.Fatalf("expected empty page with missing row dropped, got %+v", items)
 	}
 }
 
-func TestSearcherSearchBackfillsMissingRowsToKeepPagesStable(t *testing.T) {
+func TestSearcherSearchReturnsBleveMatchCountNotResolvedCount(t *testing.T) {
 	fixture := newSearchFixture(t)
-
-	fixture.indexDoc(t, "f1", map[string]any{
-		"name":       "movie one",
-		"path":       "/movie one",
-		"share_code": "sw1",
-	})
-	fixture.indexDoc(t, "missing", map[string]any{
-		"name":       "movie missing",
-		"path":       "/movie missing",
-		"share_code": "sw1",
-	})
-	fixture.indexDoc(t, "f2", map[string]any{
-		"name":       "movie two",
-		"path":       "/movie two",
-		"share_code": "sw1",
-	})
 
 	insertTestShare(t, fixture.store.db, testShareRow{
 		ShareCode:     "sw1",
@@ -120,40 +107,51 @@ func TestSearcherSearchBackfillsMissingRowsToKeepPagesStable(t *testing.T) {
 		Status:        "ACTIVE",
 		LastCrawledAt: 10,
 	})
-	insertTestFile(t, fixture.store.db, testFileRow{
-		FileID:    "f1",
-		ShareCode: "sw1",
-		ParentID:  "0",
-		Name:      "movie one",
-		Path:      "/movie one",
-	})
-	insertTestFile(t, fixture.store.db, testFileRow{
-		FileID:    "f2",
-		ShareCode: "sw1",
-		ParentID:  "0",
-		Name:      "movie two",
-		Path:      "/movie two",
-	})
+
+	// 120 documents match the query, but only every other one exists in the
+	// store. The old implementation paged through every bleve match to count
+	// the rows that resolved in the store (60) and returned that as the total.
+	// The fix returns bleve's own match count (120) from a single search.
+	const matchCount = 120
+	batch := fixture.index.NewBatch()
+	for i := 0; i < matchCount; i++ {
+		id := fmt.Sprintf("m%03d", i)
+		name := "movie " + id
+		batch.Index(id, map[string]any{
+			"name":       name,
+			"path":       "/" + name,
+			"share_code": "sw1",
+		})
+		if i%2 == 0 {
+			insertTestFile(t, fixture.store.db, testFileRow{
+				FileID:    id,
+				ShareCode: "sw1",
+				ParentID:  "0",
+				Name:      name,
+				Path:      "/" + name,
+			})
+		}
+	}
+	if err := fixture.index.Batch(batch); err != nil {
+		t.Fatalf("index.Batch() error = %v", err)
+	}
 	if err := fixture.store.RefreshShares(context.Background()); err != nil {
 		t.Fatalf("RefreshShares() error = %v", err)
 	}
 
 	items, total, err := fixture.searcher.Search(context.Background(), SearchRequest{
 		Query:   "movie",
-		Page:    2,
-		PerPage: 1,
+		Page:    1,
+		PerPage: 20,
 	})
 	if err != nil {
 		t.Fatalf("Search() error = %v", err)
 	}
-	if total != 2 {
-		t.Fatalf("expected resolved total 2, got %d", total)
+	if total != matchCount {
+		t.Fatalf("expected bleve total %d, got %d", matchCount, total)
 	}
-	if len(items) != 1 {
-		t.Fatalf("expected 1 item, got %d", len(items))
-	}
-	if items[0].FileID != "f2" {
-		t.Fatalf("expected backfilled second page to return f2, got %+v", items[0])
+	if len(items) > 20 {
+		t.Fatalf("expected at most one page (20) of items, got %d", len(items))
 	}
 }
 

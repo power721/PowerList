@@ -31,54 +31,38 @@ func (s *Searcher) Search(ctx context.Context, req SearchRequest) ([]FileItem, i
 		req.PerPage = 100
 	}
 
+	// Fetch only the requested page in a single bleve query. bleve returns the
+	// full match count as res.Total, so there is no need to page through every
+	// match to compute a total.
 	q := buildSearchQuery(req)
-	offset := 0
-	pageStart := (req.Page - 1) * req.PerPage
-	resolvedTotal := 0
-	items := make([]FileItem, 0, req.PerPage)
-
-	for {
-		searchReq := bleve.NewSearchRequestOptions(q, req.PerPage, offset, false)
-		res, err := s.index.SearchInContext(ctx, searchReq)
-		if err != nil {
-			return nil, 0, err
-		}
-		if len(res.Hits) == 0 {
-			break
-		}
-
-		ids := make([]string, 0, len(res.Hits))
-		for _, hit := range res.Hits {
-			ids = append(ids, hit.ID)
-		}
-		files, err := s.store.FilesByIDs(ctx, ids)
-		if err != nil {
-			return nil, 0, err
-		}
-
-		resolvedBatch := 0
-		for _, id := range ids {
-			item, ok := files[id]
-			if !ok {
-				continue
-			}
-			if resolvedTotal >= pageStart && len(items) < req.PerPage {
-				items = append(items, item)
-			}
-			resolvedTotal++
-			resolvedBatch++
-		}
-
-		offset += len(res.Hits)
-		if len(res.Hits) < req.PerPage {
-			break
-		}
-		if resolvedBatch == 0 && offset >= int(res.Total) {
-			break
-		}
+	from := (req.Page - 1) * req.PerPage
+	searchReq := bleve.NewSearchRequestOptions(q, req.PerPage, from, false)
+	res, err := s.index.SearchInContext(ctx, searchReq)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(res.Hits) == 0 {
+		return []FileItem{}, int(res.Total), nil
 	}
 
-	return items, resolvedTotal, nil
+	ids := make([]string, 0, len(res.Hits))
+	for _, hit := range res.Hits {
+		ids = append(ids, hit.ID)
+	}
+	files, err := s.store.FilesByIDs(ctx, ids)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Preserve bleve's relevance order; drop any hits that no longer have a
+	// store row (index/store drift) instead of backfilling from later pages.
+	items := make([]FileItem, 0, len(ids))
+	for _, id := range ids {
+		if item, ok := files[id]; ok {
+			items = append(items, item)
+		}
+	}
+	return items, int(res.Total), nil
 }
 
 func buildSearchQuery(req SearchRequest) query.Query {
