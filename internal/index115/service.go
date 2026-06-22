@@ -18,6 +18,8 @@ var (
 	ErrLinkResolveFailed = errors.New("failed to resolve 115 link")
 )
 
+var MyIndex115Service *Service
+
 type StoreReader interface {
 	ListShares(ctx context.Context) ([]ShareSummary, error)
 	ListChildren(ctx context.Context, shareCode, parentID string) ([]FileItem, error)
@@ -39,14 +41,21 @@ type Service struct {
 }
 
 func NewService(store StoreReader, search SearchReader, linker Linker) *Service {
-	return &Service{
+	MyIndex115Service = &Service{
 		store:  store,
 		search: search,
 		linker: linker,
 	}
+	return MyIndex115Service
 }
 
 func (s *Service) Browse(ctx context.Context, req BrowseRequest) ([]FileItem, error) {
+	if s == nil {
+		return nil, errors.New("browse service is nil")
+	}
+	if s.store == nil {
+		return nil, errors.New("browse store is nil")
+	}
 	if req.ShareCode == "" {
 		shares, err := s.store.ListShares(ctx)
 		if err != nil {
@@ -72,7 +81,7 @@ func (s *Service) Browse(ctx context.Context, req BrowseRequest) ([]FileItem, er
 	}
 
 	parentID := req.ParentID
-	if parentID == "" {
+	if parentID == "" || parentID == "/" {
 		parentID = "0"
 	}
 	items, err := s.store.ListChildren(ctx, req.ShareCode, parentID)
