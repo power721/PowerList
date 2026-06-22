@@ -150,6 +150,14 @@ func (s *Store) ListShares(ctx context.Context) ([]ShareSummary, error) {
 }
 
 func (s *Store) ListChildren(ctx context.Context, shareCode, parentID string) ([]FileItem, error) {
+	// Single-root shares collapse: the lone root folder duplicates the share
+	// title, so browsing the share root (parent_id="0") jumps straight into
+	// that folder's children.
+	if parentID == "0" {
+		if root := s.shares[shareCode].RootFolderID; root != "" {
+			parentID = root
+		}
+	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT file_id, share_code, parent_id, name, path, size, is_dir, ext, sha1, COALESCE(updated_at, 0)
 		FROM file
@@ -208,9 +216,10 @@ func (s *Store) FileWithFullPath(ctx context.Context, fileID string) (FileItem, 
 }
 
 func (s *Store) resolveFullPath(ctx context.Context, item FileItem) string {
+	rootFolderID := s.shares[item.ShareCode].RootFolderID
 	segments := []string{item.Name}
 	parentID := item.ParentID
-	for i := 0; i < 64 && parentID != "" && parentID != "0"; i++ {
+	for i := 0; i < 64 && parentID != "" && parentID != "0" && parentID != rootFolderID; i++ {
 		parent, ok, err := s.FileByID(ctx, parentID)
 		if err != nil || !ok {
 			break

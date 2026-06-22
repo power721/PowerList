@@ -101,6 +101,17 @@ func TestStoreListChildrenUsesShareFallbackMetadata(t *testing.T) {
 		IsDir:     true,
 		UpdatedAt: 100,
 	})
+	// sw2 is a single-root share, so ListChildren at "0" collapses past the
+	// redundant root folder and returns its children directly. Add a child to
+	// exercise that path and still assert share fallback metadata is applied.
+	insertTestFile(t, store.db, testFileRow{
+		FileID:    "file2",
+		ShareCode: "sw2",
+		ParentID:  "dir2",
+		Name:      "movie.mkv",
+		Path:      "/movie.mkv",
+		UpdatedAt: 100,
+	})
 
 	if err := store.RefreshShares(context.Background()); err != nil {
 		t.Fatalf("RefreshShares() error = %v", err)
@@ -110,8 +121,8 @@ func TestStoreListChildrenUsesShareFallbackMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListChildren() error = %v", err)
 	}
-	if len(items) != 1 {
-		t.Fatalf("expected 1 child, got %d", len(items))
+	if len(items) != 1 || items[0].FileID != "file2" {
+		t.Fatalf("expected collapsed child file2, got %+v", items)
 	}
 	if items[0].ReceiveCode != "" || items[0].ShareTitle != "sw2" {
 		t.Fatalf("expected share fallback metadata, got %+v", items[0])
@@ -265,5 +276,66 @@ func TestRefreshSharesDerivesRootFolderID(t *testing.T) {
 	}
 	if got := store.shares["sw3"].RootFolderID; got != "" {
 		t.Fatalf("sw3 RootFolderID = %q, want %q (single root file)", got, "")
+	}
+}
+
+func TestListChildrenCollapsesSingleRootFolder(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	store := openTestStore(t, dbPath)
+
+	insertTestShare(t, store.db, testShareRow{
+		ShareCode: "sw1", ReceiveCode: "rc1", ShareTitle: "Movies",
+		Status: "ACTIVE", LastCrawledAt: 1,
+	})
+	insertTestFile(t, store.db, testFileRow{FileID: "d1", ShareCode: "sw1", ParentID: "0", Name: "Movies", Path: "/Movies", IsDir: true, UpdatedAt: 10})
+	insertTestFile(t, store.db, testFileRow{FileID: "f1", ShareCode: "sw1", ParentID: "d1", Name: "a.mkv", Path: "/a.mkv", Ext: ".mkv", Size: 1024, UpdatedAt: 20})
+
+	if err := store.RefreshShares(context.Background()); err != nil {
+		t.Fatalf("RefreshShares() error = %v", err)
+	}
+
+	// Share root collapses: the redundant root folder d1 is skipped, f1 returned.
+	items, err := store.ListChildren(context.Background(), "sw1", "0")
+	if err != nil {
+		t.Fatalf("ListChildren() error = %v", err)
+	}
+	if len(items) != 1 || items[0].FileID != "f1" {
+		t.Fatalf("expected collapsed child f1 only, got %+v", items)
+	}
+
+	// resolveFullPath terminates at the root folder: path has no "Movies" prefix.
+	file, ok, err := store.FileWithFullPath(context.Background(), "f1")
+	if err != nil {
+		t.Fatalf("FileWithFullPath() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("expected file f1 to exist")
+	}
+	if file.Path != "/a.mkv" {
+		t.Fatalf("Path = %q, want %q (root folder name must be dropped)", file.Path, "/a.mkv")
+	}
+}
+
+func TestListChildrenNoCollapseWhenMultiRoot(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	store := openTestStore(t, dbPath)
+
+	insertTestShare(t, store.db, testShareRow{
+		ShareCode: "sw1", ReceiveCode: "rc1", ShareTitle: "Mix",
+		Status: "ACTIVE", LastCrawledAt: 1,
+	})
+	insertTestFile(t, store.db, testFileRow{FileID: "d1", ShareCode: "sw1", ParentID: "0", Name: "A", Path: "/A", IsDir: true, UpdatedAt: 10})
+	insertTestFile(t, store.db, testFileRow{FileID: "d2", ShareCode: "sw1", ParentID: "0", Name: "B", Path: "/B", IsDir: true, UpdatedAt: 10})
+
+	if err := store.RefreshShares(context.Background()); err != nil {
+		t.Fatalf("RefreshShares() error = %v", err)
+	}
+
+	items, err := store.ListChildren(context.Background(), "sw1", "0")
+	if err != nil {
+		t.Fatalf("ListChildren() error = %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected both root dirs (no collapse), got %d: %+v", len(items), items)
 	}
 }
