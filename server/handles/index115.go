@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/index115"
 	"github.com/OpenListTeam/OpenList/v4/server/common"
@@ -14,6 +15,7 @@ type index115HTTPService interface {
 	Browse(ctx context.Context, req index115.BrowseRequest) ([]index115.FileItem, error)
 	Search(ctx context.Context, req index115.SearchRequest) ([]index115.FileItem, int, error)
 	Link(ctx context.Context, req index115.LinkRequest) (index115.ResolvedLink, error)
+	Detail(ctx context.Context, fileID string) (index115.FileItem, bool, error)
 }
 
 var index115Service index115HTTPService
@@ -85,6 +87,29 @@ func Index115Link(c *gin.Context) {
 	})
 }
 
+func Index115Detail(c *gin.Context) {
+	if index115Service == nil {
+		common.ErrorStrResp(c, "index115 service not initialized", 503)
+		return
+	}
+
+	id := strings.TrimSpace(c.Query("id"))
+	if id == "" {
+		common.ErrorStrResp(c, "id is required", 400)
+		return
+	}
+	item, ok, err := index115Service.Detail(c.Request.Context(), id)
+	if err != nil {
+		common.ErrorResp(c, err, index115DetailErrorCode(err))
+		return
+	}
+	if !ok {
+		common.ErrorStrResp(c, "file not found", 404)
+		return
+	}
+	common.SuccessResp(c, item)
+}
+
 func parseInt(raw string, fallback int) int {
 	if raw == "" {
 		return fallback
@@ -129,4 +154,11 @@ func index115LinkErrorCode(err error) int {
 	default:
 		return 502
 	}
+}
+
+func index115DetailErrorCode(err error) int {
+	if errors.Is(err, index115.ErrStoreUnavailable) {
+		return 503
+	}
+	return 503
 }

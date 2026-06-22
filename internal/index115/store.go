@@ -151,6 +151,34 @@ func (s *Store) FileByID(ctx context.Context, fileID string) (FileItem, bool, er
 	return item, true, nil
 }
 
+// FileWithFullPath returns the file row with Path rebuilt as the full path
+// relative to the share root by walking the parent_id chain. The file table's
+// path column only stores the immediate "/name" segment, so callers that need
+// the real location (e.g. assembling a mounted-storage play path) must walk
+// parent_id up to the share root (parent_id = "0").
+func (s *Store) FileWithFullPath(ctx context.Context, fileID string) (FileItem, bool, error) {
+	item, ok, err := s.FileByID(ctx, fileID)
+	if err != nil || !ok {
+		return FileItem{}, false, err
+	}
+	item.Path = s.resolveFullPath(ctx, item)
+	return item, true, nil
+}
+
+func (s *Store) resolveFullPath(ctx context.Context, item FileItem) string {
+	segments := []string{item.Name}
+	parentID := item.ParentID
+	for i := 0; i < 64 && parentID != "" && parentID != "0"; i++ {
+		parent, ok, err := s.FileByID(ctx, parentID)
+		if err != nil || !ok {
+			break
+		}
+		segments = append([]string{parent.Name}, segments...)
+		parentID = parent.ParentID
+	}
+	return "/" + strings.Join(segments, "/")
+}
+
 func (s *Store) FilesByIDs(ctx context.Context, ids []string) (map[string]FileItem, error) {
 	if len(ids) == 0 {
 		return map[string]FileItem{}, nil

@@ -24,6 +24,7 @@ type StoreReader interface {
 	ListShares(ctx context.Context) ([]ShareSummary, error)
 	ListChildren(ctx context.Context, shareCode, parentID string) ([]FileItem, error)
 	FileByID(ctx context.Context, fileID string) (FileItem, bool, error)
+	FileWithFullPath(ctx context.Context, fileID string) (FileItem, bool, error)
 }
 
 type SearchReader interface {
@@ -120,4 +121,17 @@ func (s *Service) Link(ctx context.Context, req LinkRequest) (ResolvedLink, erro
 		return ResolvedLink{}, ErrDirectoryLink
 	}
 	return s.linker.Resolve(ctx, req, file)
+}
+
+// Detail returns a single file by id with its Path rebuilt as the full
+// within-share path (parent_id chain walked). Used by clients that play
+// through a mounted storage using the assembled path.
+func (s *Service) Detail(ctx context.Context, fileID string) (FileItem, bool, error) {
+	if s == nil {
+		return FileItem{}, false, errors.New("detail service is nil")
+	}
+	if s.store == nil {
+		return FileItem{}, false, errors.New("detail store is nil")
+	}
+	return s.store.FileWithFullPath(ctx, fileID)
 }

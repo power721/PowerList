@@ -252,6 +252,7 @@ func _sharing(g *gin.RouterGroup) {
 func _index115(g *gin.RouterGroup) {
 	g.GET("/browse", handles.Index115Browse)
 	g.GET("/search", handles.Index115Search)
+	g.GET("/detail", handles.Index115Detail)
 	g.POST("/link", handles.Index115Link)
 }
 
