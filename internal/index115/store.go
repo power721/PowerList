@@ -9,12 +9,13 @@ import (
 )
 
 type shareMeta struct {
-	ShareCode     string
-	ReceiveCode   string
-	ShareTitle    string
-	Status        string
+	ShareCode    string
+	ReceiveCode  string
+	ShareTitle   string
+	RootFolderID string
+	Status       string
 	LastCrawledAt int64
-	ID            int64
+	ID           int64
 }
 
 type Store struct {
@@ -52,6 +53,47 @@ func (s *Store) RefreshShares(ctx context.Context) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
+
+	// Derive each share's effective root folder: when a share has exactly one
+	// root-level row (parent_id='0') and it is a directory, that folder is a
+	// redundant wrapper whose name duplicates the share title — collapse it by
+	// recording its file_id here so ListChildren/resolveFullPath can skip it.
+	// Index-served via idx_file_share_parent; only root-level rows are read,
+	// never the full tree.
+	rootRows, err := s.db.QueryContext(ctx, `
+		SELECT share_code,
+		       COUNT(*) AS n,
+		       SUM(is_dir) AS dirs,
+		       MAX(CASE WHEN is_dir = 1 THEN file_id END) AS dir_id
+		FROM file
+		WHERE parent_id = '0'
+		GROUP BY share_code`)
+	if err != nil {
+		return err
+	}
+	defer rootRows.Close()
+	for rootRows.Next() {
+		var (
+			shareCode string
+			n, dirs   int
+			dirID     sql.NullString
+		)
+		if err := rootRows.Scan(&shareCode, &n, &dirs, &dirID); err != nil {
+			return err
+		}
+		meta, ok := shares[shareCode]
+		if !ok {
+			continue
+		}
+		if n == 1 && dirs == 1 && dirID.Valid {
+			meta.RootFolderID = dirID.String
+			shares[shareCode] = meta
+		}
+	}
+	if err := rootRows.Err(); err != nil {
+		return err
+	}
+
 	s.shares = shares
 	return nil
 }

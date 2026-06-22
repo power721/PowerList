@@ -226,3 +226,44 @@ func insertTestFile(t *testing.T, db *sql.DB, row testFileRow) {
 		t.Fatalf("insert file error = %v", err)
 	}
 }
+
+func TestRefreshSharesDerivesRootFolderID(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	store := openTestStore(t, dbPath)
+
+	// sw1: single root dir -> RootFolderID derived as "d1".
+	insertTestShare(t, store.db, testShareRow{
+		ShareCode: "sw1", ReceiveCode: "rc1", ShareTitle: "Movies",
+		Status: "ACTIVE", LastCrawledAt: 1,
+	})
+	insertTestFile(t, store.db, testFileRow{FileID: "d1", ShareCode: "sw1", ParentID: "0", Name: "Movies", Path: "/Movies", IsDir: true, UpdatedAt: 10})
+	insertTestFile(t, store.db, testFileRow{FileID: "f1", ShareCode: "sw1", ParentID: "d1", Name: "a.mkv", Path: "/a.mkv", UpdatedAt: 20})
+
+	// sw2: two root dirs -> "" (no collapse).
+	insertTestShare(t, store.db, testShareRow{
+		ShareCode: "sw2", ReceiveCode: "rc2", ShareTitle: "Mix",
+		Status: "ACTIVE", LastCrawledAt: 1,
+	})
+	insertTestFile(t, store.db, testFileRow{FileID: "d2a", ShareCode: "sw2", ParentID: "0", Name: "A", Path: "/A", IsDir: true, UpdatedAt: 10})
+	insertTestFile(t, store.db, testFileRow{FileID: "d2b", ShareCode: "sw2", ParentID: "0", Name: "B", Path: "/B", IsDir: true, UpdatedAt: 10})
+
+	// sw3: single root that is a FILE -> "" (no folder to collapse).
+	insertTestShare(t, store.db, testShareRow{
+		ShareCode: "sw3", ReceiveCode: "rc3", ShareTitle: "Lone",
+		Status: "ACTIVE", LastCrawledAt: 1,
+	})
+	insertTestFile(t, store.db, testFileRow{FileID: "f3", ShareCode: "sw3", ParentID: "0", Name: "lone.mkv", Path: "/lone.mkv", UpdatedAt: 10})
+
+	if err := store.RefreshShares(context.Background()); err != nil {
+		t.Fatalf("RefreshShares() error = %v", err)
+	}
+	if got := store.shares["sw1"].RootFolderID; got != "d1" {
+		t.Fatalf("sw1 RootFolderID = %q, want %q", got, "d1")
+	}
+	if got := store.shares["sw2"].RootFolderID; got != "" {
+		t.Fatalf("sw2 RootFolderID = %q, want %q (multi-root)", got, "")
+	}
+	if got := store.shares["sw3"].RootFolderID; got != "" {
+		t.Fatalf("sw3 RootFolderID = %q, want %q (single root file)", got, "")
+	}
+}
