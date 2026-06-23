@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -91,4 +92,55 @@ func (s stubIndex115WebDAVService) Browse(_ context.Context, req index115.Browse
 		return s.rootItems, nil
 	}
 	return s.childItems[req.ShareCode+":"+req.ParentID], nil
+}
+
+// stubGroupBrowseProvider returns canned children for the root, a group
+// sentinel, and a real member share, exercising the group -> member crossing.
+type stubGroupBrowseProvider struct{}
+
+func (stubGroupBrowseProvider) Browse(_ context.Context, req index115.BrowseRequest) ([]index115.FileItem, error) {
+	switch {
+	case req.ShareCode == "":
+		return []index115.FileItem{{ShareCode: "grp1", ShareTitle: "欧美剧", Name: "欧美剧", IsDir: true}}, nil
+	case req.ShareCode == "grp1":
+		return []index115.FileItem{{ShareCode: "swM", ShareTitle: "Member", Name: "Member", IsDir: true}}, nil
+	case req.ShareCode == "swM":
+		return []index115.FileItem{{FileID: "f1", ShareCode: "swM", Name: "movie.mkv", IsDir: false}}, nil
+	}
+	return nil, errors.New("unexpected browse")
+}
+
+func TestWebDAVResolveDrillsGroupIntoMember(t *testing.T) {
+	prev := index115BrowseService
+	index115BrowseService = stubGroupBrowseProvider{}
+	t.Cleanup(func() { index115BrowseService = prev })
+
+	fs := &index115WebDAVFS{}
+	entry, err := fs.resolve(context.Background(), "/欧美剧/Member")
+	if err != nil {
+		t.Fatalf("resolve() error = %v", err)
+	}
+	// Without the fix, childInfos re-browses the grp1 sentinel and returns the
+	// Member node again instead of the actual file under swM.
+	if len(entry.children) != 1 {
+		t.Fatalf("children = %d, want 1 (movie.mkv): %+v", len(entry.children), entry.children)
+	}
+	if entry.children[0].Name() != "movie.mkv" {
+		t.Fatalf("child = %q, want movie.mkv", entry.children[0].Name())
+	}
+}
+
+func TestWebDAVResolveGroupListsMembers(t *testing.T) {
+	prev := index115BrowseService
+	index115BrowseService = stubGroupBrowseProvider{}
+	t.Cleanup(func() { index115BrowseService = prev })
+
+	fs := &index115WebDAVFS{}
+	entry, err := fs.resolve(context.Background(), "/欧美剧")
+	if err != nil {
+		t.Fatalf("resolve() error = %v", err)
+	}
+	if len(entry.children) != 1 || entry.children[0].Name() != "Member" {
+		t.Fatalf("children = %+v, want [Member]", entry.children)
+	}
 }

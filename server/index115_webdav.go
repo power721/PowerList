@@ -222,6 +222,12 @@ func (fs *index115WebDAVFS) resolve(ctx context.Context, name string) (*index115
 			return nil, os.ErrNotExist
 		}
 		currentInfo = newIndex115FileInfo(match, idx == 1)
+		// Crossing from a group node (sentinel share_code like "grp1") into one
+		// of its member shares: switch the active share for deeper drilling.
+		// Normal intra-share paths are unaffected (match.ShareCode == current.ShareCode).
+		if match.ShareCode != "" && match.ShareCode != current.ShareCode {
+			current = match
+		}
 		if idx == len(parts)-1 {
 			children := []os.FileInfo(nil)
 			if match.IsDir {
