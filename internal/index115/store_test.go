@@ -179,7 +179,13 @@ func openTestStore(t *testing.T, dbPath string) *Store {
 			receive_code TEXT NOT NULL DEFAULT '',
 			share_title TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'ACTIVE',
-			last_crawled_at INTEGER NOT NULL DEFAULT 0
+			last_crawled_at INTEGER NOT NULL DEFAULT 0,
+			group_id INTEGER
+		);`,
+		`CREATE TABLE share_group (
+			group_id   INTEGER PRIMARY KEY,
+			name       TEXT NOT NULL,
+			sort_order INTEGER NOT NULL
 		);`,
 		`CREATE TABLE file (
 			file_id TEXT PRIMARY KEY,
@@ -330,5 +336,48 @@ func TestListChildrenNoCollapseWhenMultiRoot(t *testing.T) {
 	}
 	if len(items) != 2 {
 		t.Fatalf("expected both root dirs (no collapse), got %d: %+v", len(items), items)
+	}
+}
+
+func TestStoreListGroupsAndGroupMembership(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	store := openTestStore(t, dbPath)
+
+	insertTestShare(t, store.db, testShareRow{ShareCode: "sw1", ShareTitle: "Grouped", Status: "ACTIVE"})
+	insertTestShare(t, store.db, testShareRow{ShareCode: "sw2", ShareTitle: "Loose", Status: "ACTIVE"})
+	insertTestFile(t, store.db, testFileRow{FileID: "f1", ShareCode: "sw1", ParentID: "0", Name: "a.mkv", UpdatedAt: 1})
+	insertTestFile(t, store.db, testFileRow{FileID: "f2", ShareCode: "sw2", ParentID: "0", Name: "b.mkv", UpdatedAt: 1})
+	if _, err := store.db.Exec(`INSERT INTO share_group(group_id, name, sort_order) VALUES (1, '欧美剧', 1), (2, '纪录片', 2);`); err != nil {
+		t.Fatalf("insert groups: %v", err)
+	}
+	if _, err := store.db.Exec(`UPDATE share SET group_id = 1 WHERE share_code = 'sw1';`); err != nil {
+		t.Fatalf("set group_id: %v", err)
+	}
+
+	if err := store.RefreshShares(context.Background()); err != nil {
+		t.Fatalf("RefreshShares() error = %v", err)
+	}
+
+	groups, err := store.ListGroups(context.Background())
+	if err != nil {
+		t.Fatalf("ListGroups() error = %v", err)
+	}
+	if len(groups) != 2 || groups[0].ID != 1 || groups[0].Name != "欧美剧" || groups[1].Name != "纪录片" {
+		t.Fatalf("groups = %+v", groups)
+	}
+
+	items, err := store.ListShares(context.Background())
+	if err != nil {
+		t.Fatalf("ListShares() error = %v", err)
+	}
+	byCode := map[string]int64{}
+	for _, it := range items {
+		byCode[it.ShareCode] = it.GroupID
+	}
+	if byCode["sw1"] != 1 {
+		t.Fatalf("sw1 GroupID = %d, want 1", byCode["sw1"])
+	}
+	if byCode["sw2"] != 0 {
+		t.Fatalf("sw2 GroupID = %d, want 0 (loose)", byCode["sw2"])
 	}
 }

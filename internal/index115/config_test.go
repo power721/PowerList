@@ -107,7 +107,13 @@ func openRuntimeDB(t *testing.T, dbPath string) *sql.DB {
 			receive_code TEXT NOT NULL DEFAULT '',
 			share_title TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL DEFAULT 'ACTIVE',
-			last_crawled_at INTEGER NOT NULL DEFAULT 0
+			last_crawled_at INTEGER NOT NULL DEFAULT 0,
+			group_id INTEGER
+		);`,
+		`CREATE TABLE share_group (
+			group_id   INTEGER PRIMARY KEY,
+			name       TEXT NOT NULL,
+			sort_order INTEGER NOT NULL
 		);`,
 		`CREATE TABLE file (
 			file_id TEXT PRIMARY KEY,

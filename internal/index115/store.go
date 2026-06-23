@@ -13,6 +13,7 @@ type shareMeta struct {
 	ReceiveCode   string
 	ShareTitle    string
 	RootFolderID  string
+	GroupID       int64
 	Status        string
 	LastCrawledAt int64
 	ID            int64
@@ -21,6 +22,7 @@ type shareMeta struct {
 type Store struct {
 	db     *sql.DB
 	shares map[string]shareMeta
+	groups []GroupInfo
 }
 
 func OpenStore(db *sql.DB) *Store {
@@ -32,7 +34,7 @@ func OpenStore(db *sql.DB) *Store {
 
 func (s *Store) RefreshShares(ctx context.Context) error {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, share_code, COALESCE(receive_code, ''), COALESCE(share_title, ''), status, COALESCE(last_crawled_at, 0)
+		SELECT id, share_code, COALESCE(receive_code, ''), COALESCE(share_title, ''), status, COALESCE(last_crawled_at, 0), COALESCE(group_id, 0)
 		FROM share`)
 	if err != nil {
 		return err
@@ -42,7 +44,7 @@ func (s *Store) RefreshShares(ctx context.Context) error {
 	shares := map[string]shareMeta{}
 	for rows.Next() {
 		var meta shareMeta
-		if err := rows.Scan(&meta.ID, &meta.ShareCode, &meta.ReceiveCode, &meta.ShareTitle, &meta.Status, &meta.LastCrawledAt); err != nil {
+		if err := rows.Scan(&meta.ID, &meta.ShareCode, &meta.ReceiveCode, &meta.ShareTitle, &meta.Status, &meta.LastCrawledAt, &meta.GroupID); err != nil {
 			return err
 		}
 		current, ok := shares[meta.ShareCode]
@@ -94,7 +96,25 @@ func (s *Store) RefreshShares(ctx context.Context) error {
 		return err
 	}
 
+	groupRows, err := s.db.QueryContext(ctx, `SELECT group_id, name FROM share_group ORDER BY sort_order ASC`)
+	if err != nil {
+		return err
+	}
+	defer groupRows.Close()
+	var gs []GroupInfo
+	for groupRows.Next() {
+		var g GroupInfo
+		if err := groupRows.Scan(&g.ID, &g.Name); err != nil {
+			return err
+		}
+		gs = append(gs, g)
+	}
+	if err := groupRows.Err(); err != nil {
+		return err
+	}
+
 	s.shares = shares
+	s.groups = gs
 	return nil
 }
 
@@ -131,6 +151,7 @@ func (s *Store) ListShares(ctx context.Context) ([]ShareSummary, error) {
 			return nil, err
 		}
 		meta := s.shares[item.ShareCode]
+		item.GroupID = meta.GroupID
 		item.ReceiveCode = meta.ReceiveCode
 		item.ShareTitle = meta.ShareTitle
 		if item.ShareTitle == "" {
@@ -147,6 +168,10 @@ func (s *Store) ListShares(ctx context.Context) ([]ShareSummary, error) {
 		return items[i].ShareCode < items[j].ShareCode
 	})
 	return items, nil
+}
+
+func (s *Store) ListGroups(ctx context.Context) ([]GroupInfo, error) {
+	return s.groups, nil
 }
 
 func (s *Store) ListChildren(ctx context.Context, shareCode, parentID string) ([]FileItem, error) {

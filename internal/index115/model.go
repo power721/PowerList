@@ -6,9 +6,17 @@ type ShareSummary struct {
 	ShareTitle  string
 	Path        string
 	IsDir       bool
+	GroupID     int64
 	FileCount   int64
 	DirCount    int64
 	UpdatedAt   int64
+}
+
+// GroupInfo is one virtual directory rendered on the homepage. ID maps to the
+// grp<ID> sentinel share_code used to drill into the group.
+type GroupInfo struct {
+	ID   int64
+	Name string
 }
 
 type FileItem struct {
