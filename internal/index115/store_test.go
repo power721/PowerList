@@ -22,7 +22,6 @@ type testFileRow struct {
 	ShareCode string
 	ParentID  string
 	Name      string
-	Path      string
 	Ext       string
 	Size      int64
 	IsDir     bool
@@ -46,7 +45,6 @@ func TestStoreListSharesAggregatesByShareCode(t *testing.T) {
 		ShareCode: "sw1",
 		ParentID:  "0",
 		Name:      "RootDir",
-		Path:      "/RootDir",
 		IsDir:     true,
 		UpdatedAt: 100,
 	})
@@ -55,7 +53,6 @@ func TestStoreListSharesAggregatesByShareCode(t *testing.T) {
 		ShareCode: "sw1",
 		ParentID:  "0",
 		Name:      "movie.mkv",
-		Path:      "/movie.mkv",
 		Ext:       ".mkv",
 		Size:      1024,
 		IsDir:     false,
@@ -97,7 +94,6 @@ func TestStoreListChildrenUsesShareFallbackMetadata(t *testing.T) {
 		ShareCode: "sw2",
 		ParentID:  "0",
 		Name:      "Folder",
-		Path:      "/Folder",
 		IsDir:     true,
 		UpdatedAt: 100,
 	})
@@ -109,7 +105,6 @@ func TestStoreListChildrenUsesShareFallbackMetadata(t *testing.T) {
 		ShareCode: "sw2",
 		ParentID:  "dir2",
 		Name:      "movie.mkv",
-		Path:      "/movie.mkv",
 		UpdatedAt: 100,
 	})
 
@@ -145,7 +140,6 @@ func TestStoreFileByIDFindsFile(t *testing.T) {
 		ShareCode: "sw3",
 		ParentID:  "0",
 		Name:      "ep1.mp4",
-		Path:      "/ep1.mp4",
 		Ext:       ".mp4",
 		Size:      300,
 		IsDir:     false,
@@ -192,7 +186,6 @@ func openTestStore(t *testing.T, dbPath string) *Store {
 			share_code TEXT NOT NULL,
 			parent_id TEXT NOT NULL,
 			name TEXT NOT NULL,
-			path TEXT NOT NULL,
 			ext TEXT NOT NULL DEFAULT '',
 			size INTEGER NOT NULL DEFAULT 0,
 			is_dir INTEGER NOT NULL DEFAULT 0,
@@ -229,9 +222,9 @@ func insertTestFile(t *testing.T, db *sql.DB, row testFileRow) {
 		isDir = 1
 	}
 	_, err := db.Exec(
-		`INSERT INTO file(file_id, share_code, parent_id, name, path, ext, size, is_dir, depth, sha1, updated_at, crawled_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0)`,
-		row.FileID, row.ShareCode, row.ParentID, row.Name, row.Path, row.Ext, row.Size, isDir, row.SHA1, row.UpdatedAt,
+		`INSERT INTO file(file_id, share_code, parent_id, name, ext, size, is_dir, depth, sha1, updated_at, crawled_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0)`,
+		row.FileID, row.ShareCode, row.ParentID, row.Name, row.Ext, row.Size, isDir, row.SHA1, row.UpdatedAt,
 	)
 	if err != nil {
 		t.Fatalf("insert file error = %v", err)
@@ -247,23 +240,23 @@ func TestRefreshSharesDerivesRootFolderID(t *testing.T) {
 		ShareCode: "sw1", ReceiveCode: "rc1", ShareTitle: "Movies",
 		Status: "ACTIVE", LastCrawledAt: 1,
 	})
-	insertTestFile(t, store.db, testFileRow{FileID: "d1", ShareCode: "sw1", ParentID: "0", Name: "Movies", Path: "/Movies", IsDir: true, UpdatedAt: 10})
-	insertTestFile(t, store.db, testFileRow{FileID: "f1", ShareCode: "sw1", ParentID: "d1", Name: "a.mkv", Path: "/a.mkv", UpdatedAt: 20})
+	insertTestFile(t, store.db, testFileRow{FileID: "d1", ShareCode: "sw1", ParentID: "0", Name: "Movies", IsDir: true, UpdatedAt: 10})
+	insertTestFile(t, store.db, testFileRow{FileID: "f1", ShareCode: "sw1", ParentID: "d1", Name: "a.mkv", UpdatedAt: 20})
 
 	// sw2: two root dirs -> "" (no collapse).
 	insertTestShare(t, store.db, testShareRow{
 		ShareCode: "sw2", ReceiveCode: "rc2", ShareTitle: "Mix",
 		Status: "ACTIVE", LastCrawledAt: 1,
 	})
-	insertTestFile(t, store.db, testFileRow{FileID: "d2a", ShareCode: "sw2", ParentID: "0", Name: "A", Path: "/A", IsDir: true, UpdatedAt: 10})
-	insertTestFile(t, store.db, testFileRow{FileID: "d2b", ShareCode: "sw2", ParentID: "0", Name: "B", Path: "/B", IsDir: true, UpdatedAt: 10})
+	insertTestFile(t, store.db, testFileRow{FileID: "d2a", ShareCode: "sw2", ParentID: "0", Name: "A", IsDir: true, UpdatedAt: 10})
+	insertTestFile(t, store.db, testFileRow{FileID: "d2b", ShareCode: "sw2", ParentID: "0", Name: "B", IsDir: true, UpdatedAt: 10})
 
 	// sw3: single root that is a FILE -> "" (no folder to collapse).
 	insertTestShare(t, store.db, testShareRow{
 		ShareCode: "sw3", ReceiveCode: "rc3", ShareTitle: "Lone",
 		Status: "ACTIVE", LastCrawledAt: 1,
 	})
-	insertTestFile(t, store.db, testFileRow{FileID: "f3", ShareCode: "sw3", ParentID: "0", Name: "lone.mkv", Path: "/lone.mkv", UpdatedAt: 10})
+	insertTestFile(t, store.db, testFileRow{FileID: "f3", ShareCode: "sw3", ParentID: "0", Name: "lone.mkv", UpdatedAt: 10})
 
 	if err := store.RefreshShares(context.Background()); err != nil {
 		t.Fatalf("RefreshShares() error = %v", err)
@@ -287,8 +280,8 @@ func TestListChildrenCollapsesSingleRootFolder(t *testing.T) {
 		ShareCode: "sw1", ReceiveCode: "rc1", ShareTitle: "Movies",
 		Status: "ACTIVE", LastCrawledAt: 1,
 	})
-	insertTestFile(t, store.db, testFileRow{FileID: "d1", ShareCode: "sw1", ParentID: "0", Name: "Movies", Path: "/Movies", IsDir: true, UpdatedAt: 10})
-	insertTestFile(t, store.db, testFileRow{FileID: "f1", ShareCode: "sw1", ParentID: "d1", Name: "a.mkv", Path: "/a.mkv", Ext: ".mkv", Size: 1024, UpdatedAt: 20})
+	insertTestFile(t, store.db, testFileRow{FileID: "d1", ShareCode: "sw1", ParentID: "0", Name: "Movies", IsDir: true, UpdatedAt: 10})
+	insertTestFile(t, store.db, testFileRow{FileID: "f1", ShareCode: "sw1", ParentID: "d1", Name: "a.mkv", Ext: ".mkv", Size: 1024, UpdatedAt: 20})
 
 	if err := store.RefreshShares(context.Background()); err != nil {
 		t.Fatalf("RefreshShares() error = %v", err)
@@ -324,8 +317,8 @@ func TestListChildrenNoCollapseWhenMultiRoot(t *testing.T) {
 		ShareCode: "sw1", ReceiveCode: "rc1", ShareTitle: "Mix",
 		Status: "ACTIVE", LastCrawledAt: 1,
 	})
-	insertTestFile(t, store.db, testFileRow{FileID: "d1", ShareCode: "sw1", ParentID: "0", Name: "A", Path: "/A", IsDir: true, UpdatedAt: 10})
-	insertTestFile(t, store.db, testFileRow{FileID: "d2", ShareCode: "sw1", ParentID: "0", Name: "B", Path: "/B", IsDir: true, UpdatedAt: 10})
+	insertTestFile(t, store.db, testFileRow{FileID: "d1", ShareCode: "sw1", ParentID: "0", Name: "A", IsDir: true, UpdatedAt: 10})
+	insertTestFile(t, store.db, testFileRow{FileID: "d2", ShareCode: "sw1", ParentID: "0", Name: "B", IsDir: true, UpdatedAt: 10})
 
 	if err := store.RefreshShares(context.Background()); err != nil {
 		t.Fatalf("RefreshShares() error = %v", err)

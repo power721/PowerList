@@ -9,13 +9,13 @@ import (
 )
 
 type shareMeta struct {
-	ShareCode    string
-	ReceiveCode  string
-	ShareTitle   string
-	RootFolderID string
-	Status       string
+	ShareCode     string
+	ReceiveCode   string
+	ShareTitle    string
+	RootFolderID  string
+	Status        string
 	LastCrawledAt int64
-	ID           int64
+	ID            int64
 }
 
 type Store struct {
@@ -159,7 +159,7 @@ func (s *Store) ListChildren(ctx context.Context, shareCode, parentID string) ([
 		}
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT file_id, share_code, parent_id, name, path, size, is_dir, ext, sha1, COALESCE(updated_at, 0)
+		SELECT file_id, share_code, parent_id, name, size, is_dir, ext, sha1, COALESCE(updated_at, 0)
 		FROM file
 		WHERE share_code = ? AND parent_id = ?
 		ORDER BY is_dir DESC, name ASC`, shareCode, parentID)
@@ -183,13 +183,13 @@ func (s *Store) ListChildren(ctx context.Context, shareCode, parentID string) ([
 
 func (s *Store) FileByID(ctx context.Context, fileID string) (FileItem, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT file_id, share_code, parent_id, name, path, size, is_dir, ext, sha1, COALESCE(updated_at, 0)
+		SELECT file_id, share_code, parent_id, name, size, is_dir, ext, sha1, COALESCE(updated_at, 0)
 		FROM file
 		WHERE file_id = ?`, fileID)
 
 	var item FileItem
 	var isDir int
-	err := row.Scan(&item.FileID, &item.ShareCode, &item.ParentID, &item.Name, &item.Path, &item.Size, &isDir, &item.Ext, &item.SHA1, &item.UpdatedAt)
+	err := row.Scan(&item.FileID, &item.ShareCode, &item.ParentID, &item.Name, &item.Size, &isDir, &item.Ext, &item.SHA1, &item.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return FileItem{}, false, nil
 	}
@@ -243,7 +243,7 @@ func (s *Store) FilesByIDs(ctx context.Context, ids []string) (map[string]FileIt
 	}
 
 	query := fmt.Sprintf(`
-		SELECT file_id, share_code, parent_id, name, path, size, is_dir, ext, sha1, COALESCE(updated_at, 0)
+		SELECT file_id, share_code, parent_id, name, size, is_dir, ext, sha1, COALESCE(updated_at, 0)
 		FROM file
 		WHERE file_id IN (%s)`, strings.Join(placeholders, ","))
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -272,7 +272,7 @@ func scanFileItem(scanner interface {
 }) (FileItem, error) {
 	var item FileItem
 	var isDir int
-	err := scanner.Scan(&item.FileID, &item.ShareCode, &item.ParentID, &item.Name, &item.Path, &item.Size, &isDir, &item.Ext, &item.SHA1, &item.UpdatedAt)
+	err := scanner.Scan(&item.FileID, &item.ShareCode, &item.ParentID, &item.Name, &item.Size, &isDir, &item.Ext, &item.SHA1, &item.UpdatedAt)
 	if err != nil {
 		return FileItem{}, err
 	}

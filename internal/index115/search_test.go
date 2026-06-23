@@ -17,12 +17,10 @@ func TestSearcherSearchPreservesBleveOrder(t *testing.T) {
 
 	fixture.indexDoc(t, "f2", map[string]any{
 		"name":       "beta movie",
-		"path":       "/beta movie",
 		"share_code": "sw1",
 	})
 	fixture.indexDoc(t, "f1", map[string]any{
 		"name":       "alpha movie",
-		"path":       "/alpha movie",
 		"share_code": "sw1",
 	})
 
@@ -38,14 +36,12 @@ func TestSearcherSearchPreservesBleveOrder(t *testing.T) {
 		ShareCode: "sw1",
 		ParentID:  "0",
 		Name:      "alpha movie",
-		Path:      "/alpha movie",
 	})
 	insertTestFile(t, fixture.store.db, testFileRow{
 		FileID:    "f2",
 		ShareCode: "sw1",
 		ParentID:  "0",
 		Name:      "beta movie",
-		Path:      "/beta movie",
 	})
 	if err := fixture.store.RefreshShares(context.Background()); err != nil {
 		t.Fatalf("RefreshShares() error = %v", err)
@@ -75,7 +71,6 @@ func TestSearcherSearchDropsMissingSQLiteRows(t *testing.T) {
 
 	fixture.indexDoc(t, "missing", map[string]any{
 		"name":       "ghost movie",
-		"path":       "/ghost movie",
 		"share_code": "sw1",
 	})
 
@@ -119,7 +114,6 @@ func TestSearcherSearchReturnsBleveMatchCountNotResolvedCount(t *testing.T) {
 		name := "movie " + id
 		batch.Index(id, map[string]any{
 			"name":       name,
-			"path":       "/" + name,
 			"share_code": "sw1",
 		})
 		if i%2 == 0 {
@@ -128,7 +122,6 @@ func TestSearcherSearchReturnsBleveMatchCountNotResolvedCount(t *testing.T) {
 				ShareCode: "sw1",
 				ParentID:  "0",
 				Name:      name,
-				Path:      "/" + name,
 			})
 		}
 	}
