@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -22,6 +23,7 @@ var MyIndex115Service *Service
 
 type StoreReader interface {
 	ListShares(ctx context.Context) ([]ShareSummary, error)
+	ListGroups(ctx context.Context) ([]GroupInfo, error)
 	ListChildren(ctx context.Context, shareCode, parentID string) ([]FileItem, error)
 	FileByID(ctx context.Context, fileID string) (FileItem, bool, error)
 	FileWithFullPath(ctx context.Context, fileID string) (FileItem, bool, error)
@@ -50,6 +52,8 @@ func NewService(store StoreReader, search SearchReader, linker Linker) *Service 
 	return MyIndex115Service
 }
 
+const groupSentinelPrefix = "grp"
+
 func (s *Service) Browse(ctx context.Context, req BrowseRequest) ([]FileItem, error) {
 	if s == nil {
 		return nil, errors.New("browse service is nil")
@@ -57,28 +61,12 @@ func (s *Service) Browse(ctx context.Context, req BrowseRequest) ([]FileItem, er
 	if s.store == nil {
 		return nil, errors.New("browse store is nil")
 	}
+
+	if gid, ok := groupSentinelID(req.ShareCode); ok {
+		return s.listGroupMembers(ctx, gid)
+	}
 	if req.ShareCode == "" {
-		shares, err := s.store.ListShares(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
-		}
-		items := make([]FileItem, 0, len(shares))
-		for _, share := range shares {
-			name := share.ShareTitle
-			if name == "" {
-				name = share.ShareCode
-			}
-			items = append(items, FileItem{
-				ShareCode:   share.ShareCode,
-				ReceiveCode: share.ReceiveCode,
-				ShareTitle:  share.ShareTitle,
-				Name:        name,
-				Path:        "/" + name,
-				IsDir:       true,
-				UpdatedAt:   share.UpdatedAt,
-			})
-		}
-		return items, nil
+		return s.listRoot(ctx)
 	}
 
 	parentID := req.ParentID
@@ -90,6 +78,90 @@ func (s *Service) Browse(ctx context.Context, req BrowseRequest) ([]FileItem, er
 		return nil, fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
 	}
 	return items, nil
+}
+
+// listRoot renders the homepage: one virtual dir per group (share_group order),
+// followed by loose (ungrouped) shares. Grouped shares are reachable only via
+// their group sentinel.
+func (s *Service) listRoot(ctx context.Context) ([]FileItem, error) {
+	groups, err := s.store.ListGroups(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+	}
+	shares, err := s.store.ListShares(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+	}
+	items := make([]FileItem, 0, len(groups)+len(shares))
+	for _, g := range groups {
+		items = append(items, FileItem{
+			ShareCode: groupSentinel(g.ID),
+			Name:      g.Name,
+			Path:      "/" + g.Name,
+			IsDir:     true,
+		})
+	}
+	items = append(items, looseShareItems(shares)...)
+	return items, nil
+}
+
+func (s *Service) listGroupMembers(ctx context.Context, gid int64) ([]FileItem, error) {
+	shares, err := s.store.ListShares(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrStoreUnavailable, err)
+	}
+	items := make([]FileItem, 0)
+	for _, share := range shares {
+		if share.GroupID != gid {
+			continue
+		}
+		items = append(items, newShareDirItem(share))
+	}
+	return items, nil
+}
+
+func looseShareItems(shares []ShareSummary) []FileItem {
+	var items []FileItem
+	for _, share := range shares {
+		if share.GroupID != 0 {
+			continue
+		}
+		items = append(items, newShareDirItem(share))
+	}
+	return items
+}
+
+func newShareDirItem(share ShareSummary) FileItem {
+	name := share.ShareTitle
+	if name == "" {
+		name = share.ShareCode
+	}
+	return FileItem{
+		ShareCode:   share.ShareCode,
+		ReceiveCode: share.ReceiveCode,
+		ShareTitle:  share.ShareTitle,
+		Name:        name,
+		Path:        "/" + name,
+		IsDir:       true,
+		UpdatedAt:   share.UpdatedAt,
+	}
+}
+
+func groupSentinel(id int64) string {
+	return groupSentinelPrefix + strconv.FormatInt(id, 10)
+}
+
+// groupSentinelID decodes a "grp<N>" sentinel share_code. Real share codes start
+// with "sw", so there is no collision.
+func groupSentinelID(code string) (int64, bool) {
+	if !strings.HasPrefix(code, groupSentinelPrefix) {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(strings.TrimPrefix(code, groupSentinelPrefix), 10, 64)
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
 }
 
 func (s *Service) Search(ctx context.Context, req SearchRequest) ([]FileItem, int, error) {

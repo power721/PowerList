@@ -62,6 +62,7 @@ func TestServiceLinkRejectsDirectory(t *testing.T) {
 
 type stubStore struct {
 	shares []ShareSummary
+	groups []GroupInfo
 	items  []FileItem
 	file   FileItem
 	ok     bool
@@ -70,6 +71,10 @@ type stubStore struct {
 
 func (s stubStore) ListShares(ctx context.Context) ([]ShareSummary, error) {
 	return s.shares, s.err
+}
+
+func (s stubStore) ListGroups(ctx context.Context) ([]GroupInfo, error) {
+	return s.groups, s.err
 }
 
 func (s stubStore) ListChildren(ctx context.Context, shareCode, parentID string) ([]FileItem, error) {
@@ -119,5 +124,69 @@ func TestServiceLinkRejectsMissingFile(t *testing.T) {
 	})
 	if !errors.Is(err, ErrFileNotFound) {
 		t.Fatalf("expected ErrFileNotFound, got %v", err)
+	}
+}
+
+func TestServiceBrowseRootListsGroupsThenLooseShares(t *testing.T) {
+	svc := &Service{
+		store: stubStore{
+			groups: []GroupInfo{{ID: 1, Name: "欧美剧"}, {ID: 2, Name: "纪录片"}},
+			shares: []ShareSummary{
+				{ShareCode: "swG", ShareTitle: "Grouped", GroupID: 1},
+				{ShareCode: "swL", ShareTitle: "Loose", GroupID: 0},
+			},
+		},
+	}
+
+	items, err := svc.Browse(context.Background(), BrowseRequest{})
+	if err != nil {
+		t.Fatalf("Browse() error = %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 root items (2 groups + 1 loose), got %d: %+v", len(items), items)
+	}
+	if items[0].ShareCode != "grp1" || items[0].Name != "欧美剧" || !items[0].IsDir {
+		t.Fatalf("group item 0 = %+v", items[0])
+	}
+	if items[1].ShareCode != "grp2" || items[1].Name != "纪录片" {
+		t.Fatalf("group item 1 = %+v", items[1])
+	}
+	if items[2].ShareCode != "swL" || items[2].Name != "Loose" {
+		t.Fatalf("loose item = %+v (grouped swG must NOT appear at root)", items[2])
+	}
+}
+
+func TestServiceBrowseGroupSentinelListsMembersOnly(t *testing.T) {
+	svc := &Service{
+		store: stubStore{
+			shares: []ShareSummary{
+				{ShareCode: "swG1", ShareTitle: "M1", GroupID: 1},
+				{ShareCode: "swG2", ShareTitle: "M2", GroupID: 1},
+				{ShareCode: "swO", ShareTitle: "Other", GroupID: 2},
+			},
+		},
+	}
+
+	items, err := svc.Browse(context.Background(), BrowseRequest{ShareCode: "grp1"})
+	if err != nil {
+		t.Fatalf("Browse() error = %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 members, got %d: %+v", len(items), items)
+	}
+	codes := []string{items[0].ShareCode, items[1].ShareCode}
+	if codes[0] != "swG1" || codes[1] != "swG2" {
+		t.Fatalf("members = %v, want [swG1 swG2]", codes)
+	}
+}
+
+func TestServiceBrowseUnknownGroupIsEmpty(t *testing.T) {
+	svc := &Service{store: stubStore{}}
+	items, err := svc.Browse(context.Background(), BrowseRequest{ShareCode: "grp99"})
+	if err != nil {
+		t.Fatalf("Browse() error = %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected empty, got %+v", items)
 	}
 }
