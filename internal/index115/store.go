@@ -206,11 +206,27 @@ func (s *Store) ListChildren(ctx context.Context, shareCode, parentID string) ([
 	return items, rows.Err()
 }
 
-func (s *Store) FileByID(ctx context.Context, fileID string) (FileItem, bool, error) {
+// parseCompositeFileID splits a consumer-facing file id of the form
+// "shareCode-fileId" back into its share code and raw 115 cid. The cid is NOT
+// globally unique — the same folder linked by several shares reuses one cid — so
+// every lookup must be scoped by share_code. Share codes ("sw" + alphanumerics)
+// never contain '-', so the first '-' is the separator. Returns ok=false for ids
+// that are not in this form.
+func parseCompositeFileID(id string) (shareCode, fileID string, ok bool) {
+	idx := strings.IndexByte(id, '-')
+	if idx <= 0 || idx == len(id)-1 {
+		return "", "", false
+	}
+	return id[:idx], id[idx+1:], true
+}
+
+// fileByShareAndID loads a single file row scoped by (share_code, file_id). This
+// is the correct primitive now that file_id is only unique within a share.
+func (s *Store) fileByShareAndID(ctx context.Context, shareCode, fileID string) (FileItem, bool, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT file_id, share_code, parent_id, name, size, is_dir, ext, sha1, COALESCE(updated_at, 0)
 		FROM file
-		WHERE file_id = ?`, fileID)
+		WHERE share_code = ? AND file_id = ?`, shareCode, fileID)
 
 	var item FileItem
 	var isDir int
@@ -224,6 +240,17 @@ func (s *Store) FileByID(ctx context.Context, fileID string) (FileItem, bool, er
 	item.IsDir = isDir == 1
 	applyShareMeta(&item, s.shares[item.ShareCode])
 	return item, true, nil
+}
+
+// FileByID resolves a consumer-facing composite file id ("shareCode-fileId",
+// assembled by clients such as alist-tvbox) to its row, scoped by share_code so
+// a cid shared across several shares resolves within the right share.
+func (s *Store) FileByID(ctx context.Context, fileID string) (FileItem, bool, error) {
+	shareCode, fid, ok := parseCompositeFileID(fileID)
+	if !ok {
+		return FileItem{}, false, nil
+	}
+	return s.fileByShareAndID(ctx, shareCode, fid)
 }
 
 // FileWithFullPath returns the file row with Path rebuilt as the full path
@@ -245,7 +272,7 @@ func (s *Store) resolveFullPath(ctx context.Context, item FileItem) string {
 	segments := []string{item.Name}
 	parentID := item.ParentID
 	for i := 0; i < 64 && parentID != "" && parentID != "0" && parentID != rootFolderID; i++ {
-		parent, ok, err := s.FileByID(ctx, parentID)
+		parent, ok, err := s.fileByShareAndID(ctx, item.ShareCode, parentID)
 		if err != nil || !ok {
 			break
 		}

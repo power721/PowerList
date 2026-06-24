@@ -151,7 +151,7 @@ func TestStoreFileByIDFindsFile(t *testing.T) {
 		t.Fatalf("RefreshShares() error = %v", err)
 	}
 
-	file, ok, err := store.FileByID(context.Background(), "file3")
+	file, ok, err := store.FileByID(context.Background(), "sw3-file3")
 	if err != nil {
 		t.Fatalf("FileByID() error = %v", err)
 	}
@@ -160,6 +160,41 @@ func TestStoreFileByIDFindsFile(t *testing.T) {
 	}
 	if file.FileID != "file3" || file.ShareCode != "sw3" || file.ReceiveCode != "rc3" {
 		t.Fatalf("unexpected file result: %+v", file)
+	}
+}
+
+// TestStoreFileByIDCompositeIDScopesByShareCode guards the fix for the 115 cid
+// NOT being globally unique: the same folder linked by several shares reuses one
+// root cid, so the consumer-facing file id is composite "shareCode-fileId" and
+// FileByID must scope its lookup by share_code — otherwise it returns another
+// share's row for the shared cid.
+func TestStoreFileByIDCompositeIDScopesByShareCode(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	store := openTestStore(t, dbPath)
+
+	insertTestShare(t, store.db, testShareRow{ShareCode: "swA", ReceiveCode: "rcA", ShareTitle: "A", Status: "ACTIVE"})
+	insertTestShare(t, store.db, testShareRow{ShareCode: "swB", ReceiveCode: "rcB", ShareTitle: "B", Status: "ACTIVE"})
+	// Same cid under two shares (one underlying folder, two share links).
+	insertTestFile(t, store.db, testFileRow{FileID: "shared", ShareCode: "swA", ParentID: "0", Name: "fromA.mkv"})
+	insertTestFile(t, store.db, testFileRow{FileID: "shared", ShareCode: "swB", ParentID: "0", Name: "fromB.mkv"})
+
+	if err := store.RefreshShares(context.Background()); err != nil {
+		t.Fatalf("RefreshShares() error = %v", err)
+	}
+
+	a, ok, err := store.FileByID(context.Background(), "swA-shared")
+	if err != nil || !ok {
+		t.Fatalf("FileByID(swA-shared): ok=%v err=%v", ok, err)
+	}
+	if a.ShareCode != "swA" || a.Name != "fromA.mkv" {
+		t.Fatalf("swA-shared returned wrong row: %+v", a)
+	}
+	b, ok, err := store.FileByID(context.Background(), "swB-shared")
+	if err != nil || !ok {
+		t.Fatalf("FileByID(swB-shared): ok=%v err=%v", ok, err)
+	}
+	if b.ShareCode != "swB" || b.Name != "fromB.mkv" {
+		t.Fatalf("swB-shared returned wrong row: %+v", b)
 	}
 }
 
@@ -188,7 +223,7 @@ func openTestStore(t *testing.T, dbPath string) *Store {
 			sort_order INTEGER NOT NULL
 		);`,
 		`CREATE TABLE file (
-			file_id TEXT PRIMARY KEY,
+			file_id TEXT NOT NULL,
 			share_code TEXT NOT NULL,
 			parent_id TEXT NOT NULL,
 			name TEXT NOT NULL,
@@ -198,7 +233,8 @@ func openTestStore(t *testing.T, dbPath string) *Store {
 			depth INTEGER NOT NULL DEFAULT 0,
 			sha1 TEXT NOT NULL DEFAULT '',
 			updated_at INTEGER,
-			crawled_at INTEGER NOT NULL DEFAULT 0
+			crawled_at INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (share_code, file_id)
 		);`,
 	}
 	for _, stmt := range stmts {
@@ -303,7 +339,7 @@ func TestListChildrenCollapsesSingleRootFolder(t *testing.T) {
 	}
 
 	// resolveFullPath terminates at the root folder: path has no "Movies" prefix.
-	file, ok, err := store.FileWithFullPath(context.Background(), "f1")
+	file, ok, err := store.FileWithFullPath(context.Background(), "sw1-f1")
 	if err != nil {
 		t.Fatalf("FileWithFullPath() error = %v", err)
 	}
