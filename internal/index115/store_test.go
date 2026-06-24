@@ -198,6 +198,48 @@ func TestStoreFileByIDCompositeIDScopesByShareCode(t *testing.T) {
 	}
 }
 
+// TestStoreFilesBySearchIDsResolvesBareAndComposite drives the search-hit lookup
+// that backs bleve result reassembly. The index can emit two id formats: a bare
+// cid (legacy doc ids) or a composite "shareCode-fileId" (current doc ids). A
+// cid shared across shares MUST resolve to each share's own row under its
+// composite id, while a bare id falls back to file_id-only. The result is keyed
+// by the original id string so the caller can reassemble hits in either format.
+func TestStoreFilesBySearchIDsResolvesBareAndComposite(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "index.db")
+	store := openTestStore(t, dbPath)
+
+	insertTestShare(t, store.db, testShareRow{ShareCode: "swA", ReceiveCode: "rcA", ShareTitle: "A", Status: "ACTIVE"})
+	insertTestShare(t, store.db, testShareRow{ShareCode: "swB", ReceiveCode: "rcB", ShareTitle: "B", Status: "ACTIVE"})
+	insertTestShare(t, store.db, testShareRow{ShareCode: "swC", ReceiveCode: "rcC", ShareTitle: "C", Status: "ACTIVE"})
+
+	// "shared" cid under two shares: a composite id disambiguates, a bare one
+	// cannot.
+	insertTestFile(t, store.db, testFileRow{FileID: "shared", ShareCode: "swA", ParentID: "0", Name: "fromA.mkv"})
+	insertTestFile(t, store.db, testFileRow{FileID: "shared", ShareCode: "swB", ParentID: "0", Name: "fromB.mkv"})
+	insertTestFile(t, store.db, testFileRow{FileID: "only", ShareCode: "swC", ParentID: "0", Name: "only.mkv"})
+
+	if err := store.RefreshShares(context.Background()); err != nil {
+		t.Fatalf("RefreshShares() error = %v", err)
+	}
+
+	got, err := store.FilesBySearchIDs(context.Background(), []string{"swA-shared", "swB-shared", "only"})
+	if err != nil {
+		t.Fatalf("FilesBySearchIDs() error = %v", err)
+	}
+
+	// Composite ids resolve within the right share despite the colliding cid.
+	if a, ok := got["swA-shared"]; !ok || a.ShareCode != "swA" || a.Name != "fromA.mkv" {
+		t.Fatalf("swA-shared resolved wrong: %+v ok=%v", a, ok)
+	}
+	if b, ok := got["swB-shared"]; !ok || b.ShareCode != "swB" || b.Name != "fromB.mkv" {
+		t.Fatalf("swB-shared resolved wrong: %+v ok=%v", b, ok)
+	}
+	// Bare id resolves and is keyed by itself.
+	if c, ok := got["only"]; !ok || c.FileID != "only" || c.ShareCode != "swC" {
+		t.Fatalf("bare id only resolved wrong: %+v ok=%v", c, ok)
+	}
+}
+
 func openTestStore(t *testing.T, dbPath string) *Store {
 	t.Helper()
 

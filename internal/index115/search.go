@@ -49,7 +49,10 @@ func (s *Searcher) Search(ctx context.Context, req SearchRequest) ([]FileItem, i
 	for _, hit := range res.Hits {
 		ids = append(ids, hit.ID)
 	}
-	files, err := s.store.FilesByIDs(ctx, ids)
+	// ids are bleve doc ids: a bare cid (legacy index) or "shareCode-fileId"
+	// (current index). FilesBySearchIDs resolves both, scoping composite ids by
+	// share so a shared cid lands in the right share.
+	files, err := s.store.FilesBySearchIDs(ctx, ids)
 	if err != nil {
 		return nil, 0, err
 	}

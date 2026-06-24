@@ -319,6 +319,94 @@ func (s *Store) FilesByIDs(ctx context.Context, ids []string) (map[string]FileIt
 	return items, nil
 }
 
+// FilesBySearchIDs resolves bleve search-hit ids into file rows. The index can
+// emit two id formats: a bare 115 cid (legacy doc ids) or a composite
+// "shareCode-fileId" (current doc ids). Composite ids resolve via the
+// (share_code, file_id) primary key, so a cid shared across several shares
+// resolves within its own share rather than a sibling's. Bare ids fall back to
+// file_id-only — ambiguous for a shared cid (legacy, lossy), retained only for
+// back-compat with indexes built before the composite doc id. Results are keyed
+// by the original input id so callers can reassemble hits in bleve relevance
+// order regardless of format.
+func (s *Store) FilesBySearchIDs(ctx context.Context, ids []string) (map[string]FileItem, error) {
+	out := make(map[string]FileItem, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	type kv struct{ shareCode, fileID string }
+	var composites []kv
+	var bares []string
+	for _, id := range ids {
+		if shareCode, fileID, ok := parseCompositeFileID(id); ok {
+			composites = append(composites, kv{shareCode, fileID})
+		} else {
+			bares = append(bares, id)
+		}
+	}
+
+	const fileCols = `file_id, share_code, parent_id, name, size, is_dir, ext, sha1, COALESCE(updated_at, 0)`
+
+	// Composites: resolve through the (share_code, file_id) key via a row-value
+	// IN, disambiguating cids shared across shares. Keyed by "shareCode-fileId".
+	if len(composites) > 0 {
+		var q strings.Builder
+		q.WriteString(`SELECT ` + fileCols + ` FROM file WHERE (share_code, file_id) IN (`)
+		args := make([]any, 0, len(composites)*2)
+		for i, p := range composites {
+			if i > 0 {
+				q.WriteByte(',')
+			}
+			q.WriteString("(?,?)")
+			args = append(args, p.shareCode, p.fileID)
+		}
+		q.WriteByte(')')
+		if err := s.scanKeyedRows(ctx, q.String(), args, func(item FileItem) string {
+			return item.ShareCode + "-" + item.FileID
+		}, out); err != nil {
+			return nil, err
+		}
+	}
+
+	// Bares: legacy file_id-only lookup, keyed by the bare cid.
+	if len(bares) > 0 {
+		placeholders := make([]string, len(bares))
+		args := make([]any, len(bares))
+		for i, id := range bares {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		query := fmt.Sprintf(`SELECT %s FROM file WHERE file_id IN (%s)`, fileCols, strings.Join(placeholders, ","))
+		if err := s.scanKeyedRows(ctx, query, args, func(item FileItem) string {
+			return item.FileID
+		}, out); err != nil {
+			return nil, err
+		}
+	}
+
+	return out, nil
+}
+
+// scanKeyedRows runs a file SELECT and inserts each row into out under the key
+// returned by key, applying share metadata. Shared so the composite and bare
+// lookup branches in FilesBySearchIDs don't duplicate the scan/close loop.
+func (s *Store) scanKeyedRows(ctx context.Context, query string, args []any, key func(FileItem) string, out map[string]FileItem) error {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		item, err := scanFileItem(rows)
+		if err != nil {
+			return err
+		}
+		applyShareMeta(&item, s.shares[item.ShareCode])
+		out[key(item)] = item
+	}
+	return rows.Err()
+}
+
 func scanFileItem(scanner interface {
 	Scan(dest ...any) error
 }) (FileItem, error) {
