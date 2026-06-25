@@ -275,7 +275,6 @@ func openTestStore(t *testing.T, dbPath string) *Store {
 			depth INTEGER NOT NULL DEFAULT 0,
 			sha1 TEXT NOT NULL DEFAULT '',
 			updated_at INTEGER,
-			crawled_at INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (share_code, file_id)
 		);`,
 	}
@@ -306,8 +305,8 @@ func insertTestFile(t *testing.T, db *sql.DB, row testFileRow) {
 		isDir = 1
 	}
 	_, err := db.Exec(
-		`INSERT INTO file(file_id, share_code, parent_id, name, ext, size, is_dir, depth, sha1, updated_at, crawled_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0)`,
+		`INSERT INTO file(file_id, share_code, parent_id, name, ext, size, is_dir, depth, sha1, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
 		row.FileID, row.ShareCode, row.ParentID, row.Name, row.Ext, row.Size, isDir, row.SHA1, row.UpdatedAt,
 	)
 	if err != nil {

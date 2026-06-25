@@ -32,6 +32,16 @@ func OpenStore(db *sql.DB) *Store {
 	}
 }
 
+// Close releases the underlying database handle. Safe to call on a nil receiver
+// so reload callers can close the previous store without tracking whether it was
+// ever successfully opened.
+func (s *Store) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
 func (s *Store) RefreshShares(ctx context.Context) error {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, share_code, COALESCE(receive_code, ''), COALESCE(share_title, ''), status, COALESCE(last_crawled_at, 0), COALESCE(group_id, 0)

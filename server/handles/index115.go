@@ -24,6 +24,28 @@ func SetIndex115Service(service index115HTTPService) {
 	index115Service = service
 }
 
+var index115Reloader func() error
+
+// SetIndex115Reloader registers the reload callback (wired by bootstrap) that
+// reopens the index115 DB + bleve index from disk and swaps the live service.
+func SetIndex115Reloader(f func() error) {
+	index115Reloader = f
+}
+
+// Index115Reload reopens the index115 store/searcher from disk so an externally
+// updated DB/index takes effect without restarting PowerList.
+func Index115Reload(c *gin.Context) {
+	if index115Reloader == nil {
+		common.ErrorStrResp(c, "index115 reload not available", 503)
+		return
+	}
+	if err := index115Reloader(); err != nil {
+		common.ErrorResp(c, err, 500, true)
+		return
+	}
+	common.SuccessResp(c)
+}
+
 func Index115Browse(c *gin.Context) {
 	if index115Service == nil {
 		common.ErrorStrResp(c, "index115 service not initialized", 503)

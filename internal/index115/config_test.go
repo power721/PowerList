@@ -126,8 +126,7 @@ func openRuntimeDB(t *testing.T, dbPath string) *sql.DB {
 			is_dir INTEGER NOT NULL DEFAULT 0,
 			depth INTEGER NOT NULL DEFAULT 0,
 			sha1 TEXT NOT NULL DEFAULT '',
-			updated_at INTEGER,
-			crawled_at INTEGER NOT NULL DEFAULT 0
+			updated_at INTEGER
 		);`,
 		`CREATE TABLE index_manifest (
 			id INTEGER PRIMARY KEY CHECK (id = 1),

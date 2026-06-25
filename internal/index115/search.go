@@ -14,6 +14,15 @@ type Searcher struct {
 	index bleve.Index
 }
 
+// Close releases the underlying bleve index handle. Safe to call on a nil
+// receiver so reload callers can close the previous searcher unconditionally.
+func (s *Searcher) Close() error {
+	if s == nil || s.index == nil {
+		return nil
+	}
+	return s.index.Close()
+}
+
 func (s *Searcher) Search(ctx context.Context, req SearchRequest) ([]FileItem, int, error) {
 	if s == nil {
 		return nil, 0, errors.New("searcher is nil")

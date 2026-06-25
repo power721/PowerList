@@ -183,6 +183,9 @@ func admin(g *gin.RouterGroup) {
 	index.POST("/clear", middlewares.SearchIndex, handles.ClearIndex)
 	index.GET("/progress", middlewares.SearchIndex, handles.GetProgress)
 
+	i115 := g.Group("/index115")
+	i115.POST("/reload", handles.Index115Reload)
+
 	scan := g.Group("/scan")
 	scan.POST("/start", handles.StartManualScan)
 	scan.POST("/stop", handles.StopManualScan)
