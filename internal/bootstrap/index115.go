@@ -8,6 +8,7 @@ import (
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/index115"
+	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	"github.com/OpenListTeam/OpenList/v4/server"
 	"github.com/OpenListTeam/OpenList/v4/server/handles"
@@ -85,8 +86,20 @@ func ReloadIndex115() error {
 		newSearcher = nil
 	}
 	swapIndex115(newStore, newSearcher)
+	clearIndex115StorageCaches()
 	log.Info("index115 service reloaded")
 	return nil
+}
+
+// clearIndex115StorageCaches drops the directory (and link) caches of every
+// mounted "115 Index" storage, so browsing picks up the just-reloaded data
+// instead of serving stale listings until the dirCache TTL expires. Without
+// this, a reload rebuilds the store but the Pan115Index op-cache keeps serving
+// old data — the same reason a restart appeared required.
+func clearIndex115StorageCaches() {
+	for _, d := range op.GetStorages("115 Index") {
+		op.Cache.DeleteDirectoryTree(d, "/")
+	}
 }
 
 // swapIndex115 wraps freshly opened store/searcher in a service and installs it
