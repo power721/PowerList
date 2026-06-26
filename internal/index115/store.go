@@ -175,7 +175,7 @@ func (s *Store) ListShares(ctx context.Context) ([]ShareSummary, error) {
 		return nil, err
 	}
 	sort.Slice(items, func(i, j int) bool {
-		return items[i].ShareCode < items[j].ShareCode
+		return items[i].ShareTitle < items[j].ShareTitle
 	})
 	return items, nil
 }
