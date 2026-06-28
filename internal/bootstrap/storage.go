@@ -2,10 +2,11 @@ package bootstrap
 
 import (
 	"context"
+	"strconv"
+
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	log "github.com/sirupsen/logrus"
-	"strconv"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/db"
@@ -40,11 +41,16 @@ func LoadStorages() {
 		log.Infof("=== load storages completed ===")
 		if conf.LazyLoad {
 			syncStatus(2)
-			go op.ValidateStorages()
+			go validateStorages()
 		} else {
 			syncStatus(3)
 		}
 	}(storages)
+}
+
+func validateStorages() {
+	op.ValidateStorages()
+	syncStatus(3)
 }
 
 func syncStatus(code int) {
