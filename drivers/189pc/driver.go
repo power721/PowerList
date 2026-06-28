@@ -315,29 +315,35 @@ func (y *Cloud189PC) Rename(ctx context.Context, srcObj model.Obj, newName strin
 		queryParam["familyId"] = y.FamilyID
 	}
 
-	var newObj model.Obj
-	switch f := srcObj.(type) {
+	switch srcObj.(type) {
 	case *Cloud189File:
 		fullUrl += "/renameFile.action"
 		queryParam["fileId"] = srcObj.GetID()
 		queryParam["destFileName"] = newName
-		newObj = &Cloud189File{Icon: f.Icon} // 复用预览
 	case *Cloud189Folder:
 		fullUrl += "/renameFolder.action"
 		queryParam["folderId"] = srcObj.GetID()
 		queryParam["destFolderName"] = newName
-		newObj = &Cloud189Folder{}
 	default:
 		return nil, errs.NotSupport
 	}
-
+	var resp RenameResp
 	_, err := y.request(fullUrl, method, func(req *resty.Request) {
 		req.SetContext(ctx).SetQueryParams(queryParam)
-	}, nil, newObj, isFamily)
+	}, nil, resp, isFamily)
 	if err != nil {
+		if code, ok := resp.ResCode.(string); ok && code == "FileAlreadyExists" {
+			return nil, errs.ObjectAlreadyExists
+		}
 		return nil, err
 	}
-	return newObj, nil
+	switch f := srcObj.(type) {
+	case *Cloud189File:
+		return resp.toFile(f), nil
+	case *Cloud189Folder:
+		return resp.toFolder(), nil
+	}
+	return nil, errs.NotSupport
 }
 
 func (y *Cloud189PC) Copy(ctx context.Context, srcObj, dstDir model.Obj) error {
@@ -421,10 +427,11 @@ func (y *Cloud189PC) uploadFile(ctx context.Context, dstDir model.Obj, stream mo
 	uploadMethod := y.UploadMethod
 	if stream.IsForceStreamUpload() {
 		uploadMethod = "stream"
-	}
-
-	// 旧版上传家庭云也有限制
-	if uploadMethod == "old" {
+	} else if y.Addition.RapidUpload && stream.GetFile() != nil {
+		// 文件流支持随机读取，走FastUpload计算MD5并尝试秒传
+		uploadMethod = "rapid"
+	} else if uploadMethod == "old" {
+		// 旧版上传家庭云也有限制
 		return y.OldUpload(ctx, dstDir, stream, up, isFamily, overwrite)
 	}
 
@@ -485,6 +492,19 @@ func (y *Cloud189PC) uploadFile(ctx context.Context, dstDir model.Obj, stream mo
 	case "stream":
 		if stream.GetSize() == 0 {
 			return y.FastUpload(ctx, dstDir, stream, up, isFamily, overwrite)
+		}
+		// 尝试秒传：如果已有MD5且启用了RapidUpload则用RapidUpload，否则走FastUpload（会计算MD5并尝试秒传）
+		if !stream.IsForceStreamUpload() {
+			fileMd5 := stream.GetHash().GetHash(utils.MD5)
+			if len(fileMd5) >= utils.MD5.Width && y.Addition.RapidUpload {
+				// 源文件已有MD5且启用了RapidUpload配置，尝试快速秒传
+				if newObj, info, err := y.RapidUpload(ctx, dstDir, stream, isFamily, overwrite); err == nil {
+					return newObj, info, nil
+				}
+			} else if len(fileMd5) < utils.MD5.Width {
+				// 源文件无MD5（如从本地复制），走FastUpload计算MD5并尝试秒传
+				return y.FastUpload(ctx, dstDir, stream, up, isFamily, overwrite)
+			}
 		}
 		fallthrough
 	default:

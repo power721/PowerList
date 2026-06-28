@@ -111,6 +111,25 @@ func FsMove(c *gin.Context) {
 		return
 	}
 
+	if !strings.HasSuffix(srcDir, "/") {
+		srcDir += "/"
+	}
+	// ensure req.Names are not relative/traversal paths
+	safeNames := make([]string, 0, len(req.Names))
+	for _, name := range req.Names {
+		srcPath := stdpath.Join(srcDir, name)
+		if !strings.HasPrefix(srcPath+"/", srcDir) {
+			continue
+		}
+		base := stdpath.Base(srcPath)
+		if base == "." || base == "/" {
+			common.ErrorStrResp(c, fmt.Sprintf("invalid file name [%s]", name), 400)
+			return
+		}
+		safeNames = append(safeNames, name)
+	}
+	req.Names = safeNames
+
 	var validNames []string
 	if !req.Overwrite {
 		for _, name := range req.Names {
@@ -196,6 +215,25 @@ func FsCopy(c *gin.Context) {
 		common.ErrorResp(c, errs.PermissionDenied, 403)
 		return
 	}
+
+	if !strings.HasSuffix(srcDir, "/") {
+		srcDir += "/"
+	}
+	// ensure req.Names are not relative/traversal paths
+	safeNames := make([]string, 0, len(req.Names))
+	for _, name := range req.Names {
+		srcPath := stdpath.Join(srcDir, name)
+		if !strings.HasPrefix(srcPath+"/", srcDir) {
+			continue
+		}
+		base := stdpath.Base(srcPath)
+		if base == "." || base == "/" {
+			common.ErrorStrResp(c, fmt.Sprintf("invalid file name [%s]", name), 400)
+			return
+		}
+		safeNames = append(safeNames, name)
+	}
+	req.Names = safeNames
 
 	var validNames []string
 	if !req.Overwrite {
@@ -393,7 +431,7 @@ func FsRemoveEmptyDirectory(c *gin.Context) {
 		common.ErrorResp(c, errs.PermissionDenied, 403)
 		return
 	}
-	common.GinWithValue(c, conf.MetaKey, meta)
+	common.GinAppendValues(c, conf.MetaKey, meta)
 
 	rootFiles, err := fs.List(c.Request.Context(), srcDir, &fs.ListArgs{})
 	if err != nil {

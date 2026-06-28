@@ -167,7 +167,6 @@ require (
 	github.com/sorairolake/lzip-go v0.3.5 // indirect
 	github.com/taruti/bytepool v0.0.0-20160310082835-5e3a9ea56543 // indirect
 	github.com/ulikunitz/xz v0.5.12 // indirect
-	github.com/yuin/goldmark v1.7.13
 	go4.org v0.0.0-20260112195520-a5071408f32f
 	resty.dev/v3 v3.0.0-beta.2 // indirect
 )
@@ -313,3 +312,5 @@ replace github.com/ProtonMail/go-proton-api => github.com/henrybear327/go-proton
 replace github.com/cronokirby/saferith => github.com/Da3zKi7/saferith v0.33.0-fixed
 
 // replace github.com/OpenListTeam/115-sdk-go => ../../OpenListTeam/115-sdk-go
+
+replace github.com/KarpelesLab/reflink => github.com/OpenListTeam/reflink v0.0.0-20260520031008-ed3c0dbe8009
