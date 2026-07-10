@@ -10,7 +10,6 @@ import (
 	"errors"
 	_139 "github.com/OpenListTeam/OpenList/v4/drivers/139"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
-	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	log "github.com/sirupsen/logrus"
 	"io"
 	"net/http"
@@ -22,7 +21,7 @@ var (
 )
 var idx = 0
 
-func (y *Yun139Share) httpPost(pathname string, data string, auth bool) ([]byte, error) {
+func (y *Yun139Share) httpPost(pathname string, data string, authAccount *_139.Yun139) ([]byte, error) {
 	u := "https://share-kd-njs.yun.139.com/yun-share/richlifeApp/devapp/IOutLink/" + pathname
 	req := base.RestyClient.R()
 	req.SetHeaders(map[string]string{
@@ -33,12 +32,8 @@ func (y *Yun139Share) httpPost(pathname string, data string, auth bool) ([]byte,
 		"x-deviceinfo":  "||3|12.27.0|chrome|131.0.0.0|5c7c68368f048245e1ce47f1c0f8f2d0||windows 10|1536X695|zh-CN|||",
 	})
 
-	if auth {
-		driver := op.GetFirstDriver("139Yun", idx)
-		if driver != nil {
-			yun139 := driver.(*_139.Yun139)
-			req.SetHeader("Authorization", "Basic "+yun139.Authorization)
-		}
+	if authAccount != nil {
+		req.SetHeader("Authorization", "Basic "+authAccount.Authorization)
 	}
 
 	req.SetBody(data)
@@ -81,7 +76,7 @@ func (y *Yun139Share) getShareInfo(pCaID string, page int) (ListResp, error) {
 		return res, err
 	}
 
-	resp, err := y.httpPost("getOutLinkInfoV6", encrypted, false)
+	resp, err := y.httpPost("getOutLinkInfoV6", encrypted, nil)
 	if err != nil {
 		return res, err
 	}
@@ -175,7 +170,7 @@ func (y *Yun139Share) link(yun139 *_139.Yun139, fid string) (string, error) {
 		return "", err
 	}
 
-	resp, err := y.httpPost("dlFromOutLinkV3", encrypted, true)
+	resp, err := y.httpPost("dlFromOutLinkV3", encrypted, yun139)
 	if err != nil {
 		return "", err
 	}

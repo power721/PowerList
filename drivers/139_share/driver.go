@@ -47,9 +47,15 @@ func (d *Yun139Share) List(ctx context.Context, dir model.Obj, args model.ListAr
 
 func (d *Yun139Share) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	count := op.GetDriverCount("139Yun")
-	var err error
+	if count == 0 {
+		return nil, errors.New("找不到移动云盘帐号")
+	}
+	var (
+		link *model.Link
+		err  error
+	)
 	for i := 0; i < count; i++ {
-		link, err := d.myLink(ctx, file, args)
+		link, err = d.myLink(ctx, file, args)
 		if err == nil {
 			return link, nil
 		}
