@@ -111,6 +111,10 @@ type Index115 struct {
 	BleveDir string `json:"bleve_dir" env:"BLEVE_DIR"`
 }
 
+type MCP struct {
+	Enable bool `json:"enable" env:"ENABLE"`
+}
+
 type Config struct {
 	Force                 bool        `json:"force" env:"FORCE"`
 	SiteURL               string      `json:"site_url" env:"SITE_URL"`
@@ -136,6 +140,7 @@ type Config struct {
 	FTP                   FTP         `json:"ftp" envPrefix:"FTP_"`
 	SFTP                  SFTP        `json:"sftp" envPrefix:"SFTP_"`
 	Index115              Index115    `json:"index115" envPrefix:"INDEX115_"`
+	MCP                   MCP         `json:"mcp" envPrefix:"MCP_"`
 	LastLaunchedVersion   string      `json:"last_launched_version"`
 	ProxyAddress          string      `json:"proxy_address" env:"PROXY_ADDRESS"`
 }
@@ -254,6 +259,9 @@ func DefaultConfig(dataDir string) *Config {
 		SFTP: SFTP{
 			Enable: false,
 			Listen: ":5222",
+		},
+		MCP: MCP{
+			Enable: false,
 		},
 		LastLaunchedVersion: "",
 		ProxyAddress:        "",

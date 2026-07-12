@@ -200,8 +200,8 @@ func (d *Pan123) login() error {
 	req := base.RestyClient.R()
 
 	req.SetHeaders(map[string]string{
-		/*			"origin":      "https://www.123pan.com",
-					"referer":     "https://www.123pan.com/",*/
+		"origin":      "https://yun.123pan.com",
+		"referer":     "https://yun.123pan.com/",
 		"user-agent":  d.params.UserAgent,
 		"platform":    d.params.Platform,
 		"app-version": d.params.AppVersion,
@@ -238,7 +238,7 @@ func (d *Pan123) login() error {
 		return err
 	}
 	if utils.Json.Get(res.Body(), "code").ToInt() != 200 {
-		err = fmt.Errorf(utils.Json.Get(res.Body(), "message").ToString())
+		err = errors.New(utils.Json.Get(res.Body(), "message").ToString())
 	} else {
 		d.AccessToken = utils.Json.Get(res.Body(), "data", "token").ToString()
 	}
@@ -327,8 +327,8 @@ func (d *Pan123) Request(url string, method string, callback base.ReqCallback, r
 do:
 	req := base.RestyClient.R()
 	req.SetHeaders(map[string]string{
-		/*		"origin":        "https://www.123pan.com",
-				"referer":       "https://www.123pan.com/",*/
+		"origin":        "https://yun.123pan.com",
+		"referer":       "https://yun.123pan.com/",
 		"authorization": "Bearer " + d.AccessToken,
 		"user-agent":    d.params.UserAgent,
 		"platform":      d.params.Platform,
