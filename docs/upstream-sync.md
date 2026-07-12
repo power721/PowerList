@@ -1,6 +1,6 @@
 # 定期同步 OpenList 上游指南
 
-本文记录 PowerList 定期同步 OpenList 后端和 OpenList-Frontend 版本的标准流程。目标是在引入上游功能、安全修复和依赖更新的同时，保留 PowerList 自有功能，并避免覆盖本仓库的发布与 CI 配置。
+本文记录 PowerList 定期同步 OpenList 上游的标准流程。目标是在引入上游功能、安全修复和依赖更新的同时，保留 PowerList 自有功能，并避免覆盖本仓库的发布与 CI 配置。
 
 ## 同步原则
 
@@ -8,7 +8,7 @@
 - 每次从“上一次已合入 PowerList 的最后一个上游提交”开始，只同步其后的累计改动，避免重复应用已经 squash 合入的提交。
 - PowerList 自有驱动、索引、缓存、播放和 CAS 行为优先保留；冲突时融合上游修复，不使用整文件覆盖丢弃本地定制。
 - `.github/workflows/**` 保持 PowerList 版本，不引入上游 GitHub Actions 改动或新增工作流。
-- 构建脚本的逻辑保持 PowerList 版本。`build.sh` 中固定的 `webVersion` 是例外：每次同步必须更新为 OpenList-Frontend 的最新稳定 tag。
+- 构建脚本的逻辑保持 PowerList 版本。`build.sh` 中固定的 `webVersion` 是例外：每次同步必须更新为本次 OpenList 最新稳定版本。
 - `go.mod` 和 `go.sum` 是业务代码依赖清单，需要随上游代码同步并执行 `go mod tidy`。
 - 用户已有的未跟踪文件不参与同步，不删除、不覆盖、不提交。
 
@@ -56,27 +56,27 @@ git diff --name-status <last-upstream-sha>..openlist/main
 
 同步文档和提交信息必须记录实际的起止 SHA，便于下一次继续。
 
-## 3. 获取最新 Web tag
+## 3. 确定 Web 版本
 
-正式构建不能沿用旧 Web 版本，也不能使用 `rolling`。每次同步时必须读取 `OpenListTeam/OpenList-Frontend` 的最新稳定 release tag：
+OpenList-Frontend 的最新版本与 OpenList 当前最新稳定版本保持一致，不需要单独查询 Frontend 仓库。
 
-```bash
-gh api repos/OpenListTeam/OpenList-Frontend/releases/latest --jq '.tag_name'
-```
-
-未安装 GitHub CLI 时可以使用：
+获取本次 OpenList 同步目标对应的最新稳定 tag：
 
 ```bash
-curl -fsSL https://api.github.com/repos/OpenListTeam/OpenList-Frontend/releases/latest | jq -r '.tag_name'
+git describe --tags --abbrev=0 openlist/main
 ```
 
-将返回值原样记录为最新 release tag。`build.sh` 的 `webVersion` 使用前端资产版本；当前约定是移除 release tag 开头的 `v`。例如 API 返回 `v4.2.3` 时，写入值为 `4.2.3`。更新 `build.sh` 中正式构建使用的固定值：
+也可以查看同步范围内的版本 tag：
 
 ```bash
-webVersion=<latest-frontend-tag>
+git tag --contains <last-upstream-sha> --merged openlist/main --sort=-v:refname
 ```
 
-例如最新稳定 release tag 为 `v4.2.3` 时：
+将 OpenList 最新稳定 tag 原样记录到同步记录。`build.sh` 的 `webVersion` 使用去掉开头 `v` 的版本号。例如 OpenList 最新稳定 tag 为 `v4.2.3` 时，写入值为 `4.2.3`：
+
+```bash
+webVersion=<latest-openlist-version-without-v>
+```
 
 ```bash
 webVersion=4.2.3
@@ -96,7 +96,7 @@ git ls-files -s -- \
   '**/Dockerfile*'
 ```
 
-`build.sh` 需要单独处理：除 `webVersion` 更新为最新稳定 tag 外，其余内容必须保持同步前版本。
+`build.sh` 需要单独处理：除 `webVersion` 更新为本次 OpenList 最新稳定版本外，其余内容必须保持同步前版本。
 
 先检查上游涉及哪些受保护路径：
 
@@ -123,7 +123,7 @@ git diff --binary <last-upstream-sha>..openlist/main -- . \
   | git apply --3way --index -
 ```
 
-补丁完成后，再单独把 `build.sh` 的 `webVersion` 更新到第 3 节获取的最新 tag。
+补丁完成后，再单独把 `build.sh` 的 `webVersion` 更新到第 3 节确定的 OpenList 最新稳定版本。
 
 如果上游修改了 PowerList 中不存在的子系统文件，应先确认：
 
@@ -217,7 +217,7 @@ git diff <base>..HEAD -- build.sh build Dockerfile Dockerfile.ci Dockerfile.ci-h
 
 - `.github/workflows/**` 无输出。
 - `build/**` 和 Dockerfile 无输出。
-- `build.sh` 最多只有 `webVersion=<latest-frontend-tag>` 一处变化。
+- `build.sh` 最多只有 `webVersion=<latest-openlist-version-without-v>` 一处变化。
 
 ## 10. 提交与 PR
 
@@ -234,7 +234,7 @@ chore(upstream): sync OpenList after vX.Y.Z
 
 - Merge upstream changes through <upstream-head-sha> while preserving PowerList customizations.
 - Keep GitHub Actions and PowerList build logic unchanged.
-- Update build.sh webVersion to the latest OpenList-Frontend stable tag.
+- Update build.sh webVersion to the current OpenList stable version.
 - Add upstream features, security fixes, tests, and dependency updates.
 ```
 
@@ -250,7 +250,7 @@ git diff origin/main..HEAD -- build.sh build Dockerfile Dockerfile.ci Dockerfile
 PR 描述必须包含：
 
 - 后端同步起止 SHA。
-- Web 最新稳定 tag 及获取日期。
+- OpenList 最新稳定 tag 及其对应的 `webVersion`。
 - 被保护和被排除的文件。
 - 主要冲突及解决原则。
 - 实际执行的测试和未通过原因。
@@ -267,10 +267,10 @@ PR 描述必须包含：
 - Previous upstream SHA: <sha>
 - New upstream SHA: <sha>
 - OpenList release/tag reference: <tag or range>
-- OpenList-Frontend latest stable tag: <tag>
-- Frontend tag checked at: YYYY-MM-DD
+- OpenList latest stable tag: <tag>
+- build.sh webVersion: <version without v>
 - Protected paths: .github/workflows/**, build/**, Dockerfile*
-- Allowed build change: build.sh webVersion=<tag>
+- Allowed build change: build.sh webVersion=<version without v>
 - Excluded non-applicable upstream paths: <paths and reasons>
 - PowerList customizations retained: <summary>
 - Conflict resolutions: <summary>
@@ -285,7 +285,7 @@ PR 描述必须包含：
 - 已包含的最后一个上游提交：`3b1760e9`。
 - 新上游提交：`eb486712`。
 - 同步提交范围：75 个上游提交。
-- OpenList-Frontend 最新稳定 release tag：`v4.2.3`。
+- OpenList 最新稳定 release tag：`v4.2.3`。
 - GitHub Actions：未修改。
 - 构建变更：仅将 `build.sh` 的 `webVersion` 从 `4.2.2` 更新为 `4.2.3`。
 - PR：<https://github.com/power721/PowerList/pull/26>。
