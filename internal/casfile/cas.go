@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
@@ -24,6 +25,24 @@ type payload struct {
 	SliceMD5       string `json:"sliceMd5"`
 	SliceMD5Legacy string `json:"slice_md5"`
 	CreateTime     string `json:"create_time"`
+}
+
+const MaxMetadataSize = 1 << 20
+
+var ErrMetadataTooLarge = errors.New(".cas metadata exceeds 1 MiB")
+
+func ParseReader(r io.Reader) (*Info, error) {
+	if r == nil {
+		return nil, errors.New("nil .cas reader")
+	}
+	data, err := io.ReadAll(io.LimitReader(r, MaxMetadataSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read .cas content: %w", err)
+	}
+	if len(data) > MaxMetadataSize {
+		return nil, ErrMetadataTooLarge
+	}
+	return Parse(data)
 }
 
 func Parse(data []byte) (*Info, error) {
