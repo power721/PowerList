@@ -179,12 +179,17 @@ func (y *Cloud189PC) List(ctx context.Context, dir model.Obj, args model.ListArg
 
 func (y *Cloud189PC) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	if strings.HasSuffix(strings.ToLower(file.GetName()), ".cas") {
-		link, cleanupTarget, err := y.resolveExistingCASFile(ctx, file)
+		casStream, err := openTransferredCASStream(ctx, y, file)
 		if err != nil {
 			return nil, err
 		}
-		scheduleResolvedTempCleanup(ctx, y, cleanupTarget)
-		return link, nil
+		defer casStream.Close()
+
+		info, err := readTransferredCASInfo(casStream)
+		if err != nil {
+			return nil, err
+		}
+		return y.RestoreCASForPlayback(ctx, file.GetName(), info)
 	}
 	return y.directLink(ctx, file)
 }

@@ -192,6 +192,46 @@ func (y *Cloud189PC) casRestoreTempDir() model.Obj {
 	}
 }
 
+func (y *Cloud189PC) resolveCASInfoForPlayback(ctx context.Context, casFileName string, info *casfile.Info) (*model.Link, model.Obj, *Cloud189PC, error) {
+	forcedDriver := cloneDriverForCASRestore(y)
+	forcedDriver.RestoreSourceUseCurrentName = false
+	if y.FamilyID != "" {
+		forcedDriver.Type = "family"
+	}
+
+	dstDir := forcedDriver.casRestoreTempDir()
+	restoredName, err := forcedDriver.resolveRestoreSourceName(casFileName, info)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	resolvedObj, err := findResolvedCASFileByName(ctx, forcedDriver, restoredName, dstDir.GetID())
+	if err != nil {
+		if !errs.IsObjectNotFound(err) {
+			return nil, nil, nil, err
+		}
+		resolvedObj, err = restoreTransferredCASFromInfo(ctx, forcedDriver, dstDir, casFileName, info)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+
+	link, err := directLinkObj(ctx, forcedDriver, resolvedObj)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return link, resolvedObj, forcedDriver, nil
+}
+
+func (y *Cloud189PC) RestoreCASForPlayback(ctx context.Context, casFileName string, info *casfile.Info) (*model.Link, error) {
+	link, cleanupTarget, cleanupDriver, err := y.resolveCASInfoForPlayback(ctx, casFileName, info)
+	if err != nil {
+		return nil, err
+	}
+	scheduleResolvedTempCleanup(context.WithoutCancel(ctx), cleanupDriver, cleanupTarget)
+	return link, nil
+}
+
 func (y *Cloud189PC) resolveExistingCASFile(ctx context.Context, casFile model.Obj) (*model.Link, model.Obj, error) {
 	casStream, err := openTransferredCASStream(ctx, y, casFile)
 	if err != nil {
@@ -204,34 +244,8 @@ func (y *Cloud189PC) resolveExistingCASFile(ctx context.Context, casFile model.O
 		return nil, nil, err
 	}
 
-	forcedDriver := cloneDriverForCASRestore(y)
-	forcedDriver.RestoreSourceUseCurrentName = false
-	if y.FamilyID != "" {
-		forcedDriver.Type = "family"
-	}
-
-	dstDir := forcedDriver.casRestoreTempDir()
-	restoredName, err := forcedDriver.resolveRestoreSourceName(casFile.GetName(), info)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	resolvedObj, err := findResolvedCASFileByName(ctx, forcedDriver, restoredName, dstDir.GetID())
-	if err != nil {
-		if !errs.IsObjectNotFound(err) {
-			return nil, nil, err
-		}
-		resolvedObj, err = restoreTransferredCASFromInfo(ctx, forcedDriver, dstDir, casFile.GetName(), info)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-
-	link, err := directLinkObj(ctx, forcedDriver, resolvedObj)
-	if err != nil {
-		return nil, nil, err
-	}
-	return link, resolvedObj, nil
+	link, cleanupTarget, _, err := y.resolveCASInfoForPlayback(ctx, casFile.GetName(), info)
+	return link, cleanupTarget, err
 }
 
 func (y *Cloud189PC) scheduleDelayedResolvedTempCleanup(ctx context.Context, cleanupTarget model.Obj) {

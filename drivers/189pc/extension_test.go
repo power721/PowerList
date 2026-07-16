@@ -387,6 +387,74 @@ func TestResolveExistingCASFile_RestoreFailureDoesNotFallback(t *testing.T) {
 	}
 }
 
+func TestRestoreCASForPlayback_RestoresLinksAndSchedulesDetachedCleanup(t *testing.T) {
+	type contextKey string
+	const key contextKey = "request-id"
+
+	driver := &Cloud189PC{
+		Storage:   model.Storage{ID: 189},
+		Addition:  Addition{RestoreSourceUseCurrentName: true},
+		TempDirId: "temp-dir-id",
+	}
+	info := &casfile.Info{Name: "payload.mkv", Size: 7, MD5: "abc", SliceMD5: "def"}
+	restoredObj := &Cloud189File{ID: "restored-id", Name: "payload.mkv"}
+	parent := context.WithValue(context.Background(), key, "req-1")
+	parent, cancel := context.WithCancel(parent)
+	cancel()
+
+	linkSeamMu.Lock()
+	origFind := findResolvedCASFileByName
+	origRestore := restoreTransferredCASFromInfo
+	origLink := directLinkObj
+	origSchedule := scheduleResolvedTempCleanup
+	findResolvedCASFileByName = func(ctx context.Context, y *Cloud189PC, name string, folderID string) (model.Obj, error) {
+		if name != "payload.mkv" || folderID != "temp-dir-id" {
+			t.Fatalf("unexpected lookup name=%q folder=%q", name, folderID)
+		}
+		return nil, errs.ObjectNotFound
+	}
+	restoreTransferredCASFromInfo = func(ctx context.Context, y *Cloud189PC, dstDir model.Obj, casFileName string, got *casfile.Info) (model.Obj, error) {
+		if y.RestoreSourceUseCurrentName {
+			t.Fatal("expected payload-name semantics")
+		}
+		if casFileName != "renamed.cas" || got != info {
+			t.Fatalf("unexpected restore input name=%q info=%#v", casFileName, got)
+		}
+		return restoredObj, nil
+	}
+	directLinkObj = func(ctx context.Context, y *Cloud189PC, obj model.Obj) (*model.Link, error) {
+		return &model.Link{URL: "https://example.com/payload.mkv"}, nil
+	}
+	scheduled := false
+	scheduleResolvedTempCleanup = func(ctx context.Context, y *Cloud189PC, obj model.Obj) {
+		scheduled = true
+		if err := ctx.Err(); err != nil {
+			t.Fatalf("cleanup context remained canceled: %v", err)
+		}
+		if got := ctx.Value(key); got != "req-1" {
+			t.Fatalf("expected request value, got %v", got)
+		}
+		if obj != restoredObj {
+			t.Fatalf("unexpected cleanup target: %#v", obj)
+		}
+	}
+	t.Cleanup(func() {
+		findResolvedCASFileByName = origFind
+		restoreTransferredCASFromInfo = origRestore
+		directLinkObj = origLink
+		scheduleResolvedTempCleanup = origSchedule
+		linkSeamMu.Unlock()
+	})
+
+	link, err := driver.RestoreCASForPlayback(parent, "renamed.cas", info)
+	if err != nil {
+		t.Fatalf("restore CAS for playback: %v", err)
+	}
+	if link.URL != "https://example.com/payload.mkv" || !scheduled {
+		t.Fatalf("unexpected link or cleanup state: link=%#v scheduled=%v", link, scheduled)
+	}
+}
+
 func TestCloneDriverForCASRestore_ClonesCurrentFieldsAndResetsAutoRestoreState(t *testing.T) {
 	cleanupCalled := 0
 	cleanup := func() {
