@@ -96,6 +96,9 @@ func (d *ThunderShare) readSharedCASInfo(ctx context.Context, file model.Obj, ar
 	if err != nil {
 		return nil, err
 	}
+	if link == nil {
+		return nil, errors.New("找不到迅雷云盘帐号")
+	}
 	casStream, err := openThunderShareCASStream(ctx, file, link)
 	if err != nil {
 		return nil, err

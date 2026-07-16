@@ -58,6 +58,31 @@ func TestReadSharedCASInfo_PropagatesParseError(t *testing.T) {
 	}
 }
 
+func TestReadSharedCASInfo_ReturnsMissingThunderAccountForNilLink(t *testing.T) {
+	origLink := resolveThunderShareCASSourceLink
+	origOpen := openThunderShareCASStream
+	resolveThunderShareCASSourceLink = func(ctx context.Context, d *ThunderShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+		return nil, nil
+	}
+	openCalls := 0
+	openThunderShareCASStream = func(ctx context.Context, file model.Obj, link *model.Link) (model.FileStreamer, error) {
+		openCalls++
+		return nil, errors.New("stream must not open")
+	}
+	t.Cleanup(func() {
+		resolveThunderShareCASSourceLink = origLink
+		openThunderShareCASStream = origOpen
+	})
+
+	_, err := (&ThunderShare{}).readSharedCASInfo(context.Background(), &model.Object{Name: "movie.cas"}, model.LinkArgs{})
+	if err == nil || err.Error() != "找不到迅雷云盘帐号" {
+		t.Fatalf("expected missing Thunder account error, got %v", err)
+	}
+	if openCalls != 0 {
+		t.Fatalf("expected no stream open for nil link, got %d", openCalls)
+	}
+}
+
 func TestReadSharedCASInfo_RejectsOversizedMetadata(t *testing.T) {
 	origLink := resolveThunderShareCASSourceLink
 	origOpen := openThunderShareCASStream
