@@ -3,6 +3,7 @@ package thunder_share
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/thunder_browser"
@@ -64,6 +65,10 @@ func (d *ThunderShare) List(ctx context.Context, dir model.Obj, args model.ListA
 }
 
 func (d *ThunderShare) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	if strings.HasSuffix(strings.ToLower(file.GetName()), ".cas") {
+		return resolveThunderShareCASLink(ctx, d, file, args)
+	}
+
 	key := file.GetID()
 	if link, ok := thunderShareLinkCache.Get(key); ok {
 		return link, nil

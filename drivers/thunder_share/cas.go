@@ -26,6 +26,16 @@ var restore189CloudPCCAS = func(ctx context.Context, cloud *_189pc.Cloud189PC, c
 	return cloud.RestoreCASForPlayback(ctx, casFileName, info)
 }
 
+var readThunderShareCASInfo = func(ctx context.Context, d *ThunderShare, file model.Obj, args model.LinkArgs) (*casfile.Info, error) {
+	return d.readSharedCASInfo(ctx, file, args)
+}
+
+var restoreThunderShareCASInfo = restoreSharedCASInfo
+
+var resolveThunderShareCASLink = func(ctx context.Context, d *ThunderShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	return d.resolveCASPlayback(ctx, file, args)
+}
+
 func list189CloudPCCandidates() []*_189pc.Cloud189PC {
 	all := make([]*_189pc.Cloud189PC, 0)
 	for _, storage := range op.GetStorages("189CloudPC") {
@@ -71,6 +81,14 @@ func restoreSharedCASInfo(ctx context.Context, casFileName string, info *casfile
 		failures = append(failures, fmt.Errorf("189CloudPC[%d]: %w", cloud.ID, err))
 	}
 	return nil, fmt.Errorf("所有天翼云盘帐号均无法还原 CAS: %w", errors.Join(failures...))
+}
+
+func (d *ThunderShare) resolveCASPlayback(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	info, err := readThunderShareCASInfo(ctx, d, file, args)
+	if err != nil {
+		return nil, err
+	}
+	return restoreThunderShareCASInfo(ctx, file.GetName(), info)
 }
 
 func (d *ThunderShare) readSharedCASInfo(ctx context.Context, file model.Obj, args model.LinkArgs) (*casfile.Info, error) {

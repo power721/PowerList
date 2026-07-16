@@ -163,3 +163,53 @@ func TestRestoreSharedCASInfo_JoinsAllFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveCASPlayback_ReadsThenRestores(t *testing.T) {
+	info := &casfile.Info{Name: "payload.mkv", Size: 7, MD5: "abc", SliceMD5: "def"}
+	origRead := readThunderShareCASInfo
+	origRestore := restoreThunderShareCASInfo
+	readThunderShareCASInfo = func(ctx context.Context, d *ThunderShare, file model.Obj, args model.LinkArgs) (*casfile.Info, error) {
+		return info, nil
+	}
+	restoreThunderShareCASInfo = func(ctx context.Context, name string, got *casfile.Info) (*model.Link, error) {
+		if name != "movie.cas" || got != info {
+			t.Fatalf("unexpected restore input name=%q info=%#v", name, got)
+		}
+		return &model.Link{URL: "https://example.com/189/payload.mkv"}, nil
+	}
+	t.Cleanup(func() {
+		readThunderShareCASInfo = origRead
+		restoreThunderShareCASInfo = origRestore
+	})
+
+	link, err := (&ThunderShare{}).resolveCASPlayback(context.Background(), &model.Object{Name: "movie.cas"}, model.LinkArgs{})
+	if err != nil {
+		t.Fatalf("resolve CAS playback: %v", err)
+	}
+	if link.URL != "https://example.com/189/payload.mkv" {
+		t.Fatalf("unexpected link: %q", link.URL)
+	}
+}
+
+func TestResolveCASPlayback_ParseFailureDoesNotRestore(t *testing.T) {
+	parseErr := errors.New("invalid CAS")
+	origRead := readThunderShareCASInfo
+	origRestore := restoreThunderShareCASInfo
+	readThunderShareCASInfo = func(ctx context.Context, d *ThunderShare, file model.Obj, args model.LinkArgs) (*casfile.Info, error) {
+		return nil, parseErr
+	}
+	restoreCalls := 0
+	restoreThunderShareCASInfo = func(ctx context.Context, name string, info *casfile.Info) (*model.Link, error) {
+		restoreCalls++
+		return nil, nil
+	}
+	t.Cleanup(func() {
+		readThunderShareCASInfo = origRead
+		restoreThunderShareCASInfo = origRestore
+	})
+
+	_, err := (&ThunderShare{}).resolveCASPlayback(context.Background(), &model.Object{Name: "bad.cas"}, model.LinkArgs{})
+	if !errors.Is(err, parseErr) || restoreCalls != 0 {
+		t.Fatalf("unexpected error or restore calls: err=%v calls=%d", err, restoreCalls)
+	}
+}
