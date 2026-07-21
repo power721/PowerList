@@ -99,15 +99,24 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 		return link, nil
 	}
 
-	// 免转存(share-direct)为主:用分享凭据直接换直链,得到原始文件=原画,
-	// 且不转存、不占空间、无需账号(SVIP/非 SVIP 一视同仁)。share-direct 已由魔法 Referer
-	// 绕过 checkplay,UC 验证可行,夸克同后端同手法。失败再回退 save+delete(需账号)。
+	// 按主账号类型选主路径,两条路互为兜底:
+	//   有 SVIP 主账号 → 转存(save+download 原画,全速,超大文件/ISO 可靠)为主,免转存兜底
+	//   否则(非 SVIP / 无账号) → 免转存(share-direct,原画、省空间省等待)为主,转存兜底
+	// 超大文件(如 ISO)免转存直链不稳,SVIP 走转存更可靠。
 	var link *model.Link
 	var err error
-	link, err = resolveShareDirectLink(d, file)
-	if err != nil || link == nil {
-		log.Warnf("免转存失败,回退转存: %v", err)
+	if accountIsSVIP(d) {
 		link, err = resolveQuarkUCShareLink(ctx, d, file, args)
+		if err != nil || link == nil {
+			log.Warnf("SVIP 转存失败,回退免转存: %v", err)
+			link, err = resolveShareDirectLink(d, file)
+		}
+	} else {
+		link, err = resolveShareDirectLink(d, file)
+		if err != nil || link == nil {
+			log.Warnf("免转存失败,回退转存: %v", err)
+			link, err = resolveQuarkUCShareLink(ctx, d, file, args)
+		}
 	}
 	if err == nil && link != nil {
 		quarkUCShareLinkCache.Set(key, link)

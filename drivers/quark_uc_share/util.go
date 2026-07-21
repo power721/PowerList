@@ -526,6 +526,24 @@ func (d *QuarkUCShare) getFileToken(binding shareRequestBinding, pid, fid string
 // 主账号才是 save+下载原画路径实际使用的账号。无主账号返回 false。
 // quark.QuarkOrUC.VIP 在账号 Init() 时由 getVipInfo() 按 member_type 含 "SUPER_VIP" 置位。
 // 声明为 var 以便测试替换(避免单测里 op 未初始化导致死锁)。
+// accountIsSVIP 判断当前驱动类型主账号是否为 SVIP(SUPER_VIP):有主账号且 SVIP 返回 true。
+// 路由:有 SVIP 主账号 → 转存(save+download 原画,全速,超大文件/ISO 可靠);否则 → 免转存(share-direct)。
+// quark.QuarkOrUC.VIP 在账号 Init() 时由 getVipInfo() 按 member_type 含 "SUPER_VIP" 置位。
+// 声明为 var 以便测试替换(避免单测里 op 未初始化导致 GetMasterDriver 死锁)。
+var accountIsSVIP = func(d *QuarkUCShare) bool {
+	name := d.getDriverName()
+	prefix := conf.UC
+	if name == "Quark" {
+		prefix = conf.QUARK
+	}
+	storage := op.GetMasterDriver(name, prefix, 0)
+	if storage == nil {
+		return false
+	}
+	uc, ok := storage.(*quark.QuarkOrUC)
+	return ok && uc.VIP
+}
+
 // masterCookie 取当前驱动类型主账号(master)的 Cookie。
 // 夸克 share /file/download 需账号上下文(参考脚本 quarkRequestShareDownload 用 drive.fetch 带账号),
 // 匿名请求会失败 → 回退转存。故夸克取链需带主账号 Cookie;UC 匿名即可。无账号返回 ""。
