@@ -16,15 +16,20 @@ import (
 func TestQuarkUCShareLink_CachesByFileID(t *testing.T) {
 	origCache := quarkUCShareLinkCache
 	origResolver := resolveQuarkUCShareLink
+	origDirect := resolveShareDirectLink
 	quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 	resolveCalls := 0
 	resolveQuarkUCShareLink = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 		resolveCalls++
 		return &model.Link{URL: "https://example.com/quark/" + file.GetID()}, nil
 	}
+	resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link, error) {
+		return nil, errors.New("share-direct stub disabled") // 置失败,流程落到 resolveQuarkUCShareLink
+	}
 	t.Cleanup(func() {
 		quarkUCShareLinkCache = origCache
 		resolveQuarkUCShareLink = origResolver
+		resolveShareDirectLink = origDirect
 	})
 
 	d := &QuarkUCShare{Addition: Addition{ShareToken: "share-token"}, config: driver.Config{Name: "QuarkShare"}}
@@ -49,15 +54,20 @@ func TestQuarkUCShareLink_CachesByFileID(t *testing.T) {
 func TestQuarkUCShareLink_DoesNotCacheErrors(t *testing.T) {
 	origCache := quarkUCShareLinkCache
 	origResolver := resolveQuarkUCShareLink
+	origDirect := resolveShareDirectLink
 	quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 	resolveCalls := 0
 	resolveQuarkUCShareLink = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 		resolveCalls++
 		return nil, errors.New("boom")
 	}
+	resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link, error) {
+		return nil, errors.New("share-direct stub disabled") // 失败 → 落到同样报错的 resolveQuarkUCShareLink
+	}
 	t.Cleanup(func() {
 		quarkUCShareLinkCache = origCache
 		resolveQuarkUCShareLink = origResolver
+		resolveShareDirectLink = origDirect
 	})
 
 	d := &QuarkUCShare{Addition: Addition{ShareToken: "share-token"}, config: driver.Config{Name: "QuarkShare"}}
@@ -73,15 +83,20 @@ func TestQuarkUCShareLink_DoesNotCacheErrors(t *testing.T) {
 func TestQuarkUCShareLink_DifferentFileIDsDoNotShareCache(t *testing.T) {
 	origCache := quarkUCShareLinkCache
 	origResolver := resolveQuarkUCShareLink
+	origDirect := resolveShareDirectLink
 	quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 	resolveCalls := 0
 	resolveQuarkUCShareLink = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 		resolveCalls++
 		return &model.Link{URL: "https://example.com/quark/" + file.GetID()}, nil
 	}
+	resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link, error) {
+		return nil, errors.New("share-direct stub disabled") // 置失败,流程落到 resolveQuarkUCShareLink
+	}
 	t.Cleanup(func() {
 		quarkUCShareLinkCache = origCache
 		resolveQuarkUCShareLink = origResolver
+		resolveShareDirectLink = origDirect
 	})
 
 	d := &QuarkUCShare{Addition: Addition{ShareToken: "share-token"}, config: driver.Config{Name: "QuarkShare"}}
@@ -90,6 +105,46 @@ func TestQuarkUCShareLink_DifferentFileIDsDoNotShareCache(t *testing.T) {
 	_, _ = d.Link(context.Background(), &model.Object{ID: "file-2", Name: "b.mp4"}, model.LinkArgs{})
 	if resolveCalls != 2 {
 		t.Fatalf("expected resolver twice for different file IDs, got %d", resolveCalls)
+	}
+}
+
+func TestQuarkUCShareLink_PrefersShareDirect(t *testing.T) {
+	// 免转存(share-direct)为主:成功时不应调用转存路径。
+	origCache := quarkUCShareLinkCache
+	origResolver := resolveQuarkUCShareLink
+	origDirect := resolveShareDirectLink
+	quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
+	resolveCalls := 0
+	directCalls := 0
+	resolveQuarkUCShareLink = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+		resolveCalls++
+		return nil, errors.New("resolve should not be called")
+	}
+	resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link, error) {
+		directCalls++
+		return &model.Link{URL: "https://example.com/share-direct/" + file.GetID()}, nil
+	}
+	t.Cleanup(func() {
+		quarkUCShareLinkCache = origCache
+		resolveQuarkUCShareLink = origResolver
+		resolveShareDirectLink = origDirect
+	})
+
+	d := &QuarkUCShare{Addition: Addition{ShareToken: "share-token"}, config: driver.Config{Name: "QuarkShare"}}
+	file := &model.Object{ID: "fid-fidtoken-pid", Name: "video.mp4"}
+
+	link, err := d.Link(context.Background(), file, model.LinkArgs{})
+	if err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	if link == nil || link.URL == "" {
+		t.Fatalf("expected non-empty link")
+	}
+	if directCalls != 1 {
+		t.Fatalf("expected share-direct once, got %d", directCalls)
+	}
+	if resolveCalls != 0 {
+		t.Fatalf("expected resolve not called when share-direct succeeds, got %d", resolveCalls)
 	}
 }
 

@@ -519,3 +519,96 @@ func (d *QuarkUCShare) getFileToken(binding shareRequestBinding, pid, fid string
 	}
 	return "", errors.New("file not found")
 }
+
+// accountIsSVIP 判断当前驱动类型的主账号(master)是否为 SVIP(SUPER_VIP),用于路由原画 vs 免转存。
+// 直接走 GetMasterDriver(name, prefix, 0) 取主账号:不受 DriverRoundRobin 开关影响
+// (GetFirstDriver 在轮询模式下 prefix 传空,会跳过 master 查询、退回到 drivers[0])。
+// 主账号才是 save+下载原画路径实际使用的账号。无主账号返回 false。
+// quark.QuarkOrUC.VIP 在账号 Init() 时由 getVipInfo() 按 member_type 含 "SUPER_VIP" 置位。
+// 声明为 var 以便测试替换(避免单测里 op 未初始化导致死锁)。
+// masterCookie 取当前驱动类型主账号(master)的 Cookie。
+// 夸克 share /file/download 需账号上下文(参考脚本 quarkRequestShareDownload 用 drive.fetch 带账号),
+// 匿名请求会失败 → 回退转存。故夸克取链需带主账号 Cookie;UC 匿名即可。无账号返回 ""。
+func (d *QuarkUCShare) masterCookie() string {
+	name := d.getDriverName()
+	prefix := conf.UC
+	if name == "Quark" {
+		prefix = conf.QUARK
+	}
+	storage := op.GetMasterDriver(name, prefix, 0)
+	if storage == nil {
+		return ""
+	}
+	uc, ok := storage.(*quark.QuarkOrUC)
+	if !ok {
+		return ""
+	}
+	return uc.Cookie
+}
+
+// resolveShareDirectLink 免转存取链:直接用分享凭据调 /file/download 换直链,
+// 不把文件 save 到任何个人账号。匿名(仅 stoken),无账号也可用。
+// 失败时由 Link() 上层回退到 save+delete。声明为 var 以便测试替换(同 resolveQuarkUCShareLink)。
+var resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link, error) {
+	// 文件 ID 形如 {fid}-{share_fid_token}-{pdir_fid}(见 fileToObj)。
+	parts := strings.SplitN(file.GetID(), "-", 3)
+	if len(parts) < 2 {
+		return nil, errors.New("invalid share file id: " + file.GetID())
+	}
+	fileId, fidToken := parts[0], parts[1]
+	pid := ""
+	if len(parts) >= 3 {
+		pid = parts[2]
+	}
+	if d.ShareToken == "" {
+		if err := d.getShareToken(); err != nil {
+			return nil, err
+		}
+	}
+	// 取链请求 Cookie:UC 走匿名(已验证可行);夸克 share /file/download 需账号上下文,走主账号 Cookie。
+	isUC := d.getDriverName() == "UC"
+	reqCookie := ""
+	if !isUC {
+		reqCookie = d.masterCookie()
+	}
+	body := base.Json{
+		"fids":            []string{fileId},
+		"fids_token":      []string{fidToken},
+		"pwd_id":          d.ShareId,
+		"stoken":          d.ShareToken,
+		"speedup_session": "",
+	}
+	var resp DownResp
+	_, err := d.directRequest(reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
+		req.SetBody(body)
+	}, &resp)
+	// fid_token 失效时,按 pid 重新换取 share_fid_token 后重试一次(复用 saveFile 的回退策略)。
+	if err != nil && strings.Contains(err.Error(), "token校验异常") && pid != "" {
+		if newToken, e := d.getFileToken(nil, pid, fileId); e == nil && newToken != "" {
+			body["fids_token"] = []string{newToken}
+			_, err = d.directRequest(reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
+				req.SetBody(body)
+			}, &resp)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Data) == 0 || resp.Data[0].DownloadUrl == "" {
+		return nil, errors.New("empty share download url")
+	}
+	downloadUrl := resp.Data[0].DownloadUrl
+	// 后端代理用此 Header(魔法 Referer)绕过 checkplay。
+	header := http.Header{
+		"User-Agent":      []string{d.conf.ua},
+		"Referer":         []string{downloadUrl + "\\ "},
+		"Accept-Encoding": []string{"identity"},
+	}
+	log.Infof("[%v] 免转存直链 %v %v", d.getDriverName(), file.GetName(), file.GetSize())
+	// 客户端代理(alist-tvbox 等)直接用原始 URL 且自带 header,无法应用 link.Header。
+	// 追加片段标记 #x-referer=raw,供客户端解析后改用魔法 Referer;片段不会发往 CDN。
+	return &model.Link{
+		URL:    downloadUrl + "#x-referer=raw",
+		Header: header,
+	}, nil
+}

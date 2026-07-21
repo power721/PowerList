@@ -99,7 +99,16 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 		return link, nil
 	}
 
-	link, err := resolveQuarkUCShareLink(ctx, d, file, args)
+	// 免转存(share-direct)为主:用分享凭据直接换直链,得到原始文件=原画,
+	// 且不转存、不占空间、无需账号(SVIP/非 SVIP 一视同仁)。share-direct 已由魔法 Referer
+	// 绕过 checkplay,UC 验证可行,夸克同后端同手法。失败再回退 save+delete(需账号)。
+	var link *model.Link
+	var err error
+	link, err = resolveShareDirectLink(d, file)
+	if err != nil || link == nil {
+		log.Warnf("免转存失败,回退转存: %v", err)
+		link, err = resolveQuarkUCShareLink(ctx, d, file, args)
+	}
 	if err == nil && link != nil {
 		quarkUCShareLinkCache.Set(key, link)
 	}

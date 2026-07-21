@@ -2,13 +2,11 @@ package _123Share
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"net/http"
-	"net/url"
 	"sync"
 	"time"
 
@@ -71,7 +69,21 @@ func (d *Pan123Share) List(ctx context.Context, dir model.Obj, args model.ListAr
 	})
 }
 
+// resolveAnonLink 匿名换链入口,声明为 var 以便单测替换(规避真实网络/op 依赖)。
+var resolveAnonLink = func(d *Pan123Share, f File, ip string) (*model.Link, error) {
+	return d.anonDownloadLink(f, ip)
+}
+
 func (d *Pan123Share) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	// 匿名优先:公开分享可免登录换直链,无需 123Pan 账号。
+	if f, ok := file.(File); ok {
+		if link, err := resolveAnonLink(d, f, args.IP); err == nil {
+			return link, nil
+		} else if errors.Is(err, err123TrafficLimit) {
+			// 分享方流量耗尽,账号重试也无意义,直接返回真实原因。
+			return nil, err
+		}
+	}
 	count := op.GetDriverCount("123Pan")
 	var lastErr error
 	for i := 0; i < count; i++ {
@@ -92,71 +104,33 @@ func (d *Pan123Share) link(ctx context.Context, file model.Obj, args model.LinkA
 	}
 	pan123 := storage.(*_123.Pan123)
 	log.Infof("[%v] 获取123文件直链 %v %v %v", pan123.ID, file.GetName(), file.GetID(), file.GetSize())
-	// TODO return link of file, required
-	if f, ok := file.(File); ok {
-		//var resp DownResp
-		var headers map[string]string
-		if !utils.IsLocalIPAddr(args.IP) {
-			headers = map[string]string{
-				//"X-Real-IP":       "1.1.1.1",
-				"X-Forwarded-For": args.IP,
-			}
-		}
-		data := base.Json{
-			"driveId":   "0",
-			"shareKey":  d.ShareKey,
-			"SharePwd":  d.SharePwd,
-			"etag":      f.Etag,
-			"fileId":    f.FileId,
-			"s3keyFlag": f.S3KeyFlag,
-			"FileName":  f.FileName,
-			"size":      f.Size,
-		}
-		resp, err := pan123.Request(DownloadInfo, http.MethodPost, func(req *resty.Request) {
-			req.SetBody(data).SetHeaders(headers)
-		}, nil)
-		if err != nil {
-			return nil, err
-		}
-		downloadUrl := utils.Json.Get(resp, "data", "DownloadURL").ToString()
-		ou, err := url.Parse(downloadUrl)
-		if err != nil {
-			return nil, err
-		}
-		u_ := ou.String()
-		nu := ou.Query().Get("params")
-		if nu != "" {
-			du, _ := base64.StdEncoding.DecodeString(nu)
-			u, err := url.Parse(string(du))
-			if err != nil {
-				return nil, err
-			}
-			u_ = u.String()
-		}
-
-		log.Debug("download url: ", u_)
-		res, err := base.NoRedirectClient.R().SetHeader("Referer", "https://yun.123pan.com/").Get(u_)
-		if err != nil {
-			return nil, err
-		}
-		log.Debug(res.String())
-		exp := 15 * time.Minute
-		link := model.Link{
-			Expiration: &exp,
-			URL:        u_,
-		}
-		log.Debugln("res code: ", res.StatusCode())
-		if res.StatusCode() == 302 {
-			link.URL = res.Header().Get("location")
-		} else if res.StatusCode() < 300 {
-			link.URL = utils.Json.Get(res.Body(), "data", "redirect_url").ToString()
-		}
-		link.Header = http.Header{
-			"Referer": []string{fmt.Sprintf("%s://%s/", ou.Scheme, ou.Host)},
-		}
-		return &link, nil
+	f, ok := file.(File)
+	if !ok {
+		return nil, fmt.Errorf("can't convert obj")
 	}
-	return nil, fmt.Errorf("can't convert obj")
+	var headers map[string]string
+	if !utils.IsLocalIPAddr(args.IP) {
+		headers = map[string]string{
+			"X-Forwarded-For": args.IP,
+		}
+	}
+	data := base.Json{
+		"driveId":   "0",
+		"shareKey":  d.ShareKey,
+		"SharePwd":  d.SharePwd,
+		"etag":      f.Etag,
+		"fileId":    f.FileId,
+		"s3keyFlag": f.S3KeyFlag,
+		"FileName":  f.FileName,
+		"size":      f.Size,
+	}
+	resp, err := pan123.Request(DownloadInfo, http.MethodPost, func(req *resty.Request) {
+		req.SetBody(data).SetHeaders(headers)
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return unwrap123DownloadLink(utils.Json.Get(resp, "data", "DownloadURL").ToString())
 }
 
 func (d *Pan123Share) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
