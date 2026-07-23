@@ -229,7 +229,15 @@ func (d *BaiduShare2) Link(ctx context.Context, file model.Obj, args model.LinkA
 		return link, nil
 	}
 
-	link, err := resolveBaiduShareLink(ctx, d, file, args)
+	// 免转存(原画(无限),DLNA 签名直链)为主、转存(save+delete)兜底,两条路互为补充。
+	// 免转存直链不限速、免 Cookie、省空间省等待;失败时回退转存,保证可用性。
+	var link *model.Link
+	var err error
+	link, err = resolveShareDirectLink(d, file)
+	if err != nil || link == nil {
+		log.Warnf("百度免转存失败,回退转存: %v", err)
+		link, err = resolveBaiduShareLink(ctx, d, file, args)
+	}
 	if err == nil && link != nil {
 		baiduShareLinkCache.Set(key, link)
 	}
