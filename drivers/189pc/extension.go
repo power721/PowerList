@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/cookiejar"
 	"strconv"
 	"strings"
 	"sync"
@@ -404,6 +405,96 @@ func (y *Cloud189PC) claimVIPSpace() error {
 		return nil
 	}
 	return fmt.Errorf("VIP monthly space rejected: %s", message)
+}
+
+type greenSignResponse struct {
+	Result  *bool  `json:"result"`
+	Message string `json:"message"`
+	Msg     string `json:"msg"`
+}
+
+type greenSignInfoResponse struct {
+	Data *String `json:"data"`
+}
+
+func (y *Cloud189PC) newGreenActivityClient() (*resty.Client, error) {
+	token := y.getTokenInfo()
+	if token == nil || token.SessionKey == "" || token.AccessToken == "" {
+		return nil, errors.New("green activity requires session and access tokens")
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, fmt.Errorf("create green activity cookie jar: %w", err)
+	}
+	baseClient := y.getClient()
+	if baseClient == nil {
+		return nil, errors.New("green activity requires an initialized HTTP client")
+	}
+	client := baseClient.Clone().
+		SetCookieJar(jar).
+		SetHeaders(map[string]string{
+			"Accept":          "application/json, text/plain, */*",
+			"Accept-Language": "zh-CN,zh-Hans;q=0.9",
+			"Referer":         greenActivityPage,
+		})
+	res, requestErr := client.R().SetQueryParams(map[string]string{
+		"sessionKey":   token.SessionKey,
+		"sessionKeyFm": token.FamilySessionKey,
+		"eAccessToken": token.AccessToken,
+		"redirectUrl":  greenActivityPage,
+		"rand":         "6947_" + strconv.FormatInt(time.Now().Unix(), 10),
+	}).Get(checkinMarketBaseURL + "/ssoLoginMerge.action")
+	if err := activityResponseError("green activity SSO", res, requestErr); err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+func (y *Cloud189PC) greenDailyCheckin(client *resty.Client) error {
+	token := y.getTokenInfo()
+	var signResult greenSignResponse
+	res, requestErr := client.R().
+		SetResult(&signResult).
+		SetQueryParams(map[string]string{
+			"sessionKey": token.SessionKey,
+			"activityId": greenActivityID,
+		}).
+		Get(checkinMarketBaseURL + "/market/signInNew.action")
+	var resultErrs []error
+	if err := activityResponseError("green daily check-in", res, requestErr); err != nil {
+		resultErrs = append(resultErrs, err)
+	} else if signResult.Result == nil {
+		resultErrs = append(resultErrs, errors.New("green daily check-in response omitted result"))
+	} else if !*signResult.Result {
+		message := safeActivityMessage(marketResponseMessage(checkinMarketResponse{
+			Message: signResult.Message,
+			Msg:     signResult.Msg,
+		}), token.SessionKey, token.AccessToken)
+		if alreadyCompletedActivity(message) {
+			log.Infof("[%v] green daily check-in: %s", y.ID, message)
+		} else {
+			resultErrs = append(resultErrs, fmt.Errorf("green daily check-in rejected: %s", message))
+		}
+	} else {
+		log.Infof("[%v] green daily check-in succeeded", y.ID)
+	}
+
+	var info greenSignInfoResponse
+	res, requestErr = client.R().
+		SetResult(&info).
+		SetQueryParams(map[string]string{
+			"sessionKey": token.SessionKey,
+			"activityId": greenActivityID,
+		}).
+		Get(checkinMarketBaseURL + "/market/signInNewInfo.action")
+	if err := activityResponseError("green sign-in info", res, requestErr); err != nil {
+		resultErrs = append(resultErrs, err)
+	} else if info.Data == nil {
+		resultErrs = append(resultErrs, errors.New("green sign-in info response omitted data"))
+	} else {
+		log.Infof("[%v] green activity weekly sign-in day: %s", y.ID, string(*info.Data))
+	}
+	return errors.Join(resultErrs...)
 }
 
 func (y *Cloud189PC) Checkin() {

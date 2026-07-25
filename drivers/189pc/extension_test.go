@@ -662,3 +662,56 @@ func TestSafeActivityMessageRedactsSecretsAndBoundsOutput(t *testing.T) {
 		t.Fatalf("expected bounded activity message, got length %d and value %q", len(got), got)
 	}
 }
+
+func TestGreenDailyCheckinUsesMergedSSOCookie(t *testing.T) {
+	var paths []string
+	useCheckinMarketServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/ssoLoginMerge.action":
+			if r.URL.Query().Get("sessionKey") != "session-key" ||
+				r.URL.Query().Get("sessionKeyFm") != "family-key" ||
+				r.URL.Query().Get("eAccessToken") != "access-token" {
+				t.Fatalf("unexpected SSO query: %v", r.URL.Query())
+			}
+			http.SetCookie(w, &http.Cookie{Name: "green-session", Value: "ready", Path: "/"})
+			_, _ = io.WriteString(w, "ok")
+		case "/market/signInNew.action":
+			cookie, err := r.Cookie("green-session")
+			if err != nil || cookie.Value != "ready" {
+				t.Fatalf("green sign-in did not retain SSO cookie: cookie=%v err=%v", cookie, err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"result":true}`)
+		case "/market/signInNewInfo.action":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"data":3}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	driver := &Cloud189PC{
+		Storage: model.Storage{ID: 189},
+		client:  resty.New(),
+		tokenInfo: &AppSessionResp{
+			AccessToken: "access-token",
+			UserSessionResp: UserSessionResp{
+				SessionKey:       "session-key",
+				FamilySessionKey: "family-key",
+			},
+		},
+	}
+
+	client, err := driver.newGreenActivityClient()
+	if err != nil {
+		t.Fatalf("establish green SSO: %v", err)
+	}
+	if err := driver.greenDailyCheckin(client); err != nil {
+		t.Fatalf("green daily check-in: %v", err)
+	}
+	want := []string{"/ssoLoginMerge.action", "/market/signInNew.action", "/market/signInNewInfo.action"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Fatalf("unexpected request sequence: want=%v got=%v", want, paths)
+	}
+}
