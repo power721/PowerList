@@ -3,6 +3,7 @@ package _189pc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -713,5 +714,84 @@ func TestGreenDailyCheckinUsesMergedSSOCookie(t *testing.T) {
 	want := []string{"/ssoLoginMerge.action", "/market/signInNew.action", "/market/signInNewInfo.action"}
 	if !reflect.DeepEqual(paths, want) {
 		t.Fatalf("unexpected request sequence: want=%v got=%v", want, paths)
+	}
+}
+
+func TestRunGreenTasksExecutesOnlyIncompleteTasksInAllCategories(t *testing.T) {
+	var listedTypes []string
+	var executed []string
+	useCheckinMarketServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/market/getGreenTaskList.action":
+			taskType := r.URL.Query().Get("taskType")
+			listedTypes = append(listedTypes, taskType)
+			_, _ = io.WriteString(w, fmt.Sprintf(
+				`{"data":[{"taskId":"done-%s","taskName":"done","status":true},{"taskId":"todo-%s","taskName":"todo","status":false}]}`,
+				taskType, taskType,
+			))
+		case "/market/doGreenTask.action":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse task form: %v", err)
+			}
+			executed = append(executed, r.Form.Get("taskId"))
+			_, _ = io.WriteString(w, `{"data":true}`)
+		case "/market/getGreenLevelList.action":
+			_, _ = io.WriteString(w, `{"data":{"userScore":42}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	driver := &Cloud189PC{
+		Storage:   model.Storage{ID: 189},
+		tokenInfo: &AppSessionResp{UserSessionResp: UserSessionResp{SessionKey: "session-key"}},
+	}
+	client := resty.New()
+	for _, taskType := range []string{"1", "2", "3"} {
+		if err := driver.runGreenTasks(client, taskType); err != nil {
+			t.Fatalf("run green task type %s: %v", taskType, err)
+		}
+	}
+	if err := driver.queryGreenScore(client); err != nil {
+		t.Fatalf("query green score: %v", err)
+	}
+	if !reflect.DeepEqual(listedTypes, []string{"1", "2", "3"}) {
+		t.Fatalf("unexpected listed task types: %v", listedTypes)
+	}
+	if !reflect.DeepEqual(executed, []string{"todo-1", "todo-2", "todo-3"}) {
+		t.Fatalf("expected only incomplete tasks, got %v", executed)
+	}
+}
+
+func TestRunGreenTasksContinuesAfterOneTaskSubmissionFails(t *testing.T) {
+	var executed []string
+	useCheckinMarketServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/market/getGreenTaskList.action":
+			_, _ = io.WriteString(w, `{"data":[{"taskId":"first","taskName":"first","status":false},{"taskId":"second","taskName":"second","status":false}]}`)
+		case "/market/doGreenTask.action":
+			if err := r.ParseForm(); err != nil {
+				t.Fatalf("parse task form: %v", err)
+			}
+			executed = append(executed, r.Form.Get("taskId"))
+			if r.Form.Get("taskId") == "first" {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			_, _ = io.WriteString(w, `{"data":true}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	driver := &Cloud189PC{
+		tokenInfo: &AppSessionResp{UserSessionResp: UserSessionResp{SessionKey: "session-key"}},
+	}
+	if err := driver.runGreenTasks(resty.New(), "1"); err == nil {
+		t.Fatal("expected the failed task submission to be reported")
+	}
+	if !reflect.DeepEqual(executed, []string{"first", "second"}) {
+		t.Fatalf("expected later task to run after failure, got %v", executed)
 	}
 }

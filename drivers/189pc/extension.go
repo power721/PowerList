@@ -497,6 +497,103 @@ func (y *Cloud189PC) greenDailyCheckin(client *resty.Client) error {
 	return errors.Join(resultErrs...)
 }
 
+type greenTask struct {
+	TaskID   String `json:"taskId"`
+	TaskName string `json:"taskName"`
+	Status   bool   `json:"status"`
+}
+
+type greenTaskListResponse struct {
+	Data *[]greenTask `json:"data"`
+}
+
+type greenTaskResult struct {
+	Data *bool `json:"data"`
+}
+
+type greenScoreResponse struct {
+	Data *struct {
+		UserScore *String `json:"userScore"`
+	} `json:"data"`
+}
+
+func (y *Cloud189PC) runGreenTasks(client *resty.Client, taskType string) error {
+	token := y.getTokenInfo()
+	if token == nil || token.SessionKey == "" {
+		return errors.New("green tasks require a session key")
+	}
+	var list greenTaskListResponse
+	res, requestErr := client.R().
+		SetResult(&list).
+		SetQueryParams(map[string]string{
+			"sessionKey": token.SessionKey,
+			"activityId": greenActivityID,
+			"random":     strconv.FormatInt(time.Now().UnixNano(), 10),
+			"taskType":   taskType,
+		}).
+		Get(checkinMarketBaseURL + "/market/getGreenTaskList.action")
+	if err := activityResponseError("green task list type "+taskType, res, requestErr); err != nil {
+		return err
+	}
+	if list.Data == nil {
+		return fmt.Errorf("green task list type %s omitted data", taskType)
+	}
+
+	var taskErrs []error
+	for _, task := range *list.Data {
+		if task.Status {
+			continue
+		}
+		var result greenTaskResult
+		res, requestErr = client.R().
+			SetResult(&result).
+			SetFormData(map[string]string{
+				"activityId": greenActivityID,
+				"sessionKey": token.SessionKey,
+				"taskId":     string(task.TaskID),
+			}).
+			Post(checkinMarketBaseURL + "/market/doGreenTask.action")
+		if err := activityResponseError("green task "+string(task.TaskID), res, requestErr); err != nil {
+			taskErrs = append(taskErrs, err)
+			continue
+		}
+		if result.Data == nil {
+			taskErrs = append(taskErrs, fmt.Errorf("green task %s omitted result data", task.TaskID))
+			continue
+		}
+		name := safeActivityMessage(task.TaskName, token.SessionKey)
+		if *result.Data {
+			log.Infof("[%v] green task completed: %s", y.ID, name)
+		} else {
+			log.Infof("[%v] green task skipped: %s", y.ID, name)
+		}
+	}
+	return errors.Join(taskErrs...)
+}
+
+func (y *Cloud189PC) queryGreenScore(client *resty.Client) error {
+	token := y.getTokenInfo()
+	if token == nil || token.SessionKey == "" {
+		return errors.New("green score requires a session key")
+	}
+	var result greenScoreResponse
+	res, requestErr := client.R().
+		SetResult(&result).
+		SetQueryParams(map[string]string{
+			"sessionKey": token.SessionKey,
+			"activityId": greenActivityID,
+		}).
+		Get(checkinMarketBaseURL + "/market/getGreenLevelList.action")
+	if err := activityResponseError("green score", res, requestErr); err != nil {
+		return err
+	}
+	if result.Data == nil || result.Data.UserScore == nil {
+		return errors.New("green score response omitted userScore")
+	}
+	log.Infof("[%v] green energy: %sg", y.ID, string(*result.Data.UserScore))
+	return nil
+}
+
 func (y *Cloud189PC) Checkin() {
 	if !y.AutoCheckin {
 		return
