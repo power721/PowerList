@@ -795,3 +795,93 @@ func TestRunGreenTasksContinuesAfterOneTaskSubmissionFails(t *testing.T) {
 		t.Fatalf("expected later task to run after failure, got %v", executed)
 	}
 }
+
+func TestCheckinContinuesToGreenScoreAfterEarlierFailures(t *testing.T) {
+	var requested []string
+	var listedTaskTypes []string
+	useCheckinMarketServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/mkt/userSign.action":
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"code":"FAILED","message":"ordinary failed"}`)
+		case "/v2/drawPrizeMarketDetails.action":
+			_, _ = io.WriteString(w, `{}`)
+		case "/market/drawTargetSpace.action":
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = io.WriteString(w, `{}`)
+		case "/ssoLoginMerge.action":
+			http.SetCookie(w, &http.Cookie{Name: "green-session", Value: "ready", Path: "/"})
+			_, _ = io.WriteString(w, "ok")
+		case "/market/signInNew.action":
+			_, _ = io.WriteString(w, `{"result":false,"message":"temporary failure"}`)
+		case "/market/signInNewInfo.action":
+			_, _ = io.WriteString(w, `{"data":2}`)
+		case "/market/getGreenTaskList.action":
+			taskType := r.URL.Query().Get("taskType")
+			listedTaskTypes = append(listedTaskTypes, taskType)
+			if taskType == "1" {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			_, _ = io.WriteString(w, `{"data":[]}`)
+		case "/market/getGreenLevelList.action":
+			_, _ = io.WriteString(w, `{"data":{"userScore":99}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	driver := &Cloud189PC{
+		Storage: model.Storage{ID: 189},
+		client:  resty.New(),
+		tokenInfo: &AppSessionResp{
+			AccessToken: "access-token",
+			UserSessionResp: UserSessionResp{
+				SessionKey:       "session-key",
+				SessionSecret:    "0123456789abcdef",
+				FamilySessionKey: "family-key",
+			},
+		},
+	}
+	driver.checkin()
+
+	foundScore := false
+	for _, path := range requested {
+		if path == "/market/getGreenLevelList.action" {
+			foundScore = true
+			break
+		}
+	}
+	if !foundScore {
+		t.Fatalf("expected score lookup after earlier failures, requests=%v", requested)
+	}
+	if !reflect.DeepEqual(listedTaskTypes, []string{"1", "2", "3"}) {
+		t.Fatalf("expected all task categories, got %v", listedTaskTypes)
+	}
+}
+
+func TestRunGreenActivityStopsAfterSSOFailure(t *testing.T) {
+	var requested []string
+	useCheckinMarketServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.URL.Path)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	driver := &Cloud189PC{
+		client: resty.New(),
+		tokenInfo: &AppSessionResp{
+			AccessToken: "access-token",
+			UserSessionResp: UserSessionResp{
+				SessionKey:       "session-key",
+				FamilySessionKey: "family-key",
+			},
+		},
+	}
+	if err := driver.runGreenActivity(); err == nil {
+		t.Fatal("expected green activity to fail when SSO fails")
+	}
+	if !reflect.DeepEqual(requested, []string{"/ssoLoginMerge.action"}) {
+		t.Fatalf("expected green workflow to stop after SSO, requests=%v", requested)
+	}
+}

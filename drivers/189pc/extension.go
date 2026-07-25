@@ -594,6 +594,49 @@ func (y *Cloud189PC) queryGreenScore(client *resty.Client) error {
 	return nil
 }
 
+func (y *Cloud189PC) runCheckinStep(name string, step func() error) {
+	if err := step(); err != nil {
+		log.Warnf("[%v] %s failed: %v", y.ID, name, err)
+		return
+	}
+	log.Infof("[%v] %s completed", y.ID, name)
+}
+
+func (y *Cloud189PC) standardCloudCheckin() error {
+	_, err := y.get(checkinAPIBaseURL+"/mkt/userSign.action", nil, nil)
+	return err
+}
+
+func (y *Cloud189PC) drawStandardCheckinPrize() error {
+	_, err := y.get(checkinMarketBaseURL+"/v2/drawPrizeMarketDetails.action", func(req *resty.Request) {
+		req.SetQueryParams(map[string]string{
+			"taskId":     "TASK_SIGNIN",
+			"activityId": "ACT_SIGNIN",
+		})
+	}, nil)
+	return err
+}
+
+func (y *Cloud189PC) runGreenActivity() error {
+	client, err := y.newGreenActivityClient()
+	if err != nil {
+		return err
+	}
+	var activityErrs []error
+	if err := y.greenDailyCheckin(client); err != nil {
+		activityErrs = append(activityErrs, err)
+	}
+	for _, taskType := range []string{"1", "2", "3"} {
+		if err := y.runGreenTasks(client, taskType); err != nil {
+			activityErrs = append(activityErrs, err)
+		}
+	}
+	if err := y.queryGreenScore(client); err != nil {
+		activityErrs = append(activityErrs, err)
+	}
+	return errors.Join(activityErrs...)
+}
+
 func (y *Cloud189PC) Checkin() {
 	if !y.AutoCheckin {
 		return
@@ -607,24 +650,10 @@ func (y *Cloud189PC) Checkin() {
 }
 
 func (y *Cloud189PC) checkin() {
-	url := API_URL + "/mkt/userSign.action"
-	res, err := y.get(url, nil, nil)
-	log.Infof("[%v] checkin result: %s", y.ID, string(res))
-	if err != nil {
-		log.Warnf("[%v] checkin failed: %v", y.ID, err)
-	}
-
-	res, err = y.get("https://m.cloud.189.cn/v2/drawPrizeMarketDetails.action?taskId=TASK_SIGNIN&activityId=ACT_SIGNIN", nil, nil)
-	log.Infof("[%v] TASK_SIGNIN result: %s", y.ID, string(res))
-	if err != nil {
-		log.Warnf("[%v] TASK_SIGNIN failed: %v", y.ID, err)
-	}
-
-	//res, err = y.get("https://m.cloud.189.cn/v2/drawPrizeMarketDetails.action?taskId=TASK_SIGNIN_PHOTOS&activityId=ACT_SIGNIN", nil, nil)
-	//log.Infof("TASK_SIGNIN_PHOTOS result: %s", string(res))
-	//if err != nil {
-	//	log.Warnf("TASK_SIGNIN_PHOTOS failed: %v", err)
-	//}
+	y.runCheckinStep("cloud check-in", y.standardCloudCheckin)
+	y.runCheckinStep("check-in prize draw", y.drawStandardCheckinPrize)
+	y.runCheckinStep("VIP monthly space", y.claimVIPSpace)
+	y.runCheckinStep("green activity", y.runGreenActivity)
 }
 
 func (y *Cloud189PC) GetShareLink(shareId int, file model.Obj) (*model.Link, error) {
