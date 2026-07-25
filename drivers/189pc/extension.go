@@ -365,6 +365,13 @@ func safeActivityMessage(message string, secrets ...string) string {
 	return message
 }
 
+func activitySecrets(token *AppSessionResp) []string {
+	if token == nil {
+		return nil
+	}
+	return []string{token.SessionKey, token.FamilySessionKey, token.AccessToken}
+}
+
 func marketResponseMessage(resp checkinMarketResponse) string {
 	if resp.Message != "" {
 		return resp.Message
@@ -399,7 +406,7 @@ func (y *Cloud189PC) claimVIPSpace() error {
 		return err
 	}
 
-	message := safeActivityMessage(marketResponseMessage(result), token.SessionKey)
+	message := safeActivityMessage(marketResponseMessage(result), activitySecrets(token)...)
 	if string(result.Code) == "0" || alreadyCompletedActivity(message) {
 		log.Infof("[%v] VIP monthly space: %s", y.ID, message)
 		return nil
@@ -469,7 +476,7 @@ func (y *Cloud189PC) greenDailyCheckin(client *resty.Client) error {
 		message := safeActivityMessage(marketResponseMessage(checkinMarketResponse{
 			Message: signResult.Message,
 			Msg:     signResult.Msg,
-		}), token.SessionKey, token.AccessToken)
+		}), activitySecrets(token)...)
 		if alreadyCompletedActivity(message) {
 			log.Infof("[%v] green daily check-in: %s", y.ID, message)
 		} else {
@@ -492,7 +499,8 @@ func (y *Cloud189PC) greenDailyCheckin(client *resty.Client) error {
 	} else if info.Data == nil {
 		resultErrs = append(resultErrs, errors.New("green sign-in info response omitted data"))
 	} else {
-		log.Infof("[%v] green activity weekly sign-in day: %s", y.ID, string(*info.Data))
+		day := safeActivityMessage(string(*info.Data), activitySecrets(token)...)
+		log.Infof("[%v] green activity weekly sign-in day: %s", y.ID, day)
 	}
 	return errors.Join(resultErrs...)
 }
@@ -545,6 +553,7 @@ func (y *Cloud189PC) runGreenTasks(client *resty.Client, taskType string) error 
 			continue
 		}
 		var result greenTaskResult
+		taskID := safeActivityMessage(string(task.TaskID), activitySecrets(token)...)
 		res, requestErr = client.R().
 			SetResult(&result).
 			SetFormData(map[string]string{
@@ -553,15 +562,15 @@ func (y *Cloud189PC) runGreenTasks(client *resty.Client, taskType string) error 
 				"taskId":     string(task.TaskID),
 			}).
 			Post(checkinMarketBaseURL + "/market/doGreenTask.action")
-		if err := activityResponseError("green task "+string(task.TaskID), res, requestErr); err != nil {
+		if err := activityResponseError("green task "+taskID, res, requestErr); err != nil {
 			taskErrs = append(taskErrs, err)
 			continue
 		}
 		if result.Data == nil {
-			taskErrs = append(taskErrs, fmt.Errorf("green task %s omitted result data", task.TaskID))
+			taskErrs = append(taskErrs, fmt.Errorf("green task %s omitted result data", taskID))
 			continue
 		}
-		name := safeActivityMessage(task.TaskName, token.SessionKey)
+		name := safeActivityMessage(task.TaskName, activitySecrets(token)...)
 		if *result.Data {
 			log.Infof("[%v] green task completed: %s", y.ID, name)
 		} else {
@@ -590,7 +599,8 @@ func (y *Cloud189PC) queryGreenScore(client *resty.Client) error {
 	if result.Data == nil || result.Data.UserScore == nil {
 		return errors.New("green score response omitted userScore")
 	}
-	log.Infof("[%v] green energy: %sg", y.ID, string(*result.Data.UserScore))
+	score := safeActivityMessage(string(*result.Data.UserScore), activitySecrets(token)...)
+	log.Infof("[%v] green energy: %sg", y.ID, score)
 	return nil
 }
 

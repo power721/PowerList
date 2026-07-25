@@ -1,6 +1,7 @@
 package _189pc
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/http_range"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
+	log "github.com/sirupsen/logrus"
 )
 
 var linkSeamMu sync.Mutex
@@ -883,5 +885,58 @@ func TestRunGreenActivityStopsAfterSSOFailure(t *testing.T) {
 	}
 	if !reflect.DeepEqual(requested, []string{"/ssoLoginMerge.action"}) {
 		t.Fatalf("expected green workflow to stop after SSO, requests=%v", requested)
+	}
+}
+
+func TestGreenActivityLogsRedactAllSessionTokens(t *testing.T) {
+	const accessToken = "access-token-secret"
+	useCheckinMarketServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/market/signInNew.action":
+			_, _ = io.WriteString(w, `{"result":true}`)
+		case "/market/signInNewInfo.action":
+			_, _ = io.WriteString(w, `{"data":"access-token-secret"}`)
+		case "/market/getGreenTaskList.action":
+			_, _ = io.WriteString(w, `{"data":[{"taskId":"task","taskName":"access-token-secret","status":false}]}`)
+		case "/market/doGreenTask.action":
+			_, _ = io.WriteString(w, `{"data":true}`)
+		case "/market/getGreenLevelList.action":
+			_, _ = io.WriteString(w, `{"data":{"userScore":"access-token-secret"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	driver := &Cloud189PC{
+		Storage: model.Storage{ID: 189},
+		tokenInfo: &AppSessionResp{
+			AccessToken: accessToken,
+			UserSessionResp: UserSessionResp{
+				SessionKey:       "session-key-secret",
+				FamilySessionKey: "family-key-secret",
+			},
+		},
+	}
+	var output bytes.Buffer
+	logger := log.StandardLogger()
+	originalOutput := logger.Out
+	logger.SetOutput(&output)
+	t.Cleanup(func() {
+		logger.SetOutput(originalOutput)
+	})
+
+	client := resty.New()
+	if err := driver.greenDailyCheckin(client); err != nil {
+		t.Fatalf("green daily check-in: %v", err)
+	}
+	if err := driver.runGreenTasks(client, "1"); err != nil {
+		t.Fatalf("run green tasks: %v", err)
+	}
+	if err := driver.queryGreenScore(client); err != nil {
+		t.Fatalf("query green score: %v", err)
+	}
+	if strings.Contains(output.String(), accessToken) {
+		t.Fatalf("access token leaked into logs: %s", output.String())
 	}
 }
