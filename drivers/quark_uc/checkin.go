@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
+	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/go-resty/resty/v2"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -129,4 +131,45 @@ func (d *QuarkOrUC) checkin() (quarkCheckinResult, error) {
 		Progress:  capSign.SignProgress + 1,
 		Target:    capSign.SignTarget,
 	}, nil
+}
+
+type quarkCheckinScheduler interface {
+	Do(func())
+	Stop()
+}
+
+var (
+	newQuarkCheckinScheduler = func(interval time.Duration) quarkCheckinScheduler { return cron.NewCron(interval) }
+	launchQuarkCheckin       = func(job func()) { go job() }
+)
+
+func (d *QuarkOrUC) executeCheckin() {
+	result, err := d.checkin()
+	if err != nil {
+		log.Warnf("[%d] Quark check-in failed: %v", d.ID, err)
+		return
+	}
+	status := "signed"
+	if result.AlreadySigned {
+		status = "already signed"
+	}
+	log.Infof("[%d] Quark check-in %s: +%dMiB, progress %d/%d", d.ID, status, result.RewardMiB, result.Progress, result.Target)
+}
+
+func (d *QuarkOrUC) stopCheckin() {
+	if d.checkinScheduler != nil {
+		d.checkinScheduler.Stop()
+		d.checkinScheduler = nil
+	}
+}
+
+func (d *QuarkOrUC) startCheckin() {
+	d.stopCheckin()
+	if !d.AutoCheckin || d.config.Name != "Quark" {
+		return
+	}
+	job := d.executeCheckin
+	launchQuarkCheckin(job)
+	d.checkinScheduler = newQuarkCheckinScheduler(quarkCheckinInterval)
+	d.checkinScheduler.Do(job)
 }

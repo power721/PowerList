@@ -6,8 +6,9 @@ import (
 )
 
 type Addition struct {
-	Cookie string `json:"cookie" required:"true"`
-	Token  string `json:"token"`
+	Cookie      string `json:"cookie" required:"true"`
+	Token       string `json:"token"`
+	AutoCheckin bool   `json:"auto_checkin"`
 	driver.RootID
 	OrderBy               string `json:"order_by" type:"select" options:"none,file_type,file_name,updated_at" default:"none"`
 	OrderDirection        string `json:"order_direction" type:"select" options:"asc,desc" default:"asc"`

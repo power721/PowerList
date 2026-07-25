@@ -1,6 +1,7 @@
 package quark
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,7 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/go-resty/resty/v2"
 )
 
@@ -125,5 +128,83 @@ func TestQuarkCheckinMissingGrowthDataReturnsError(t *testing.T) {
 	d := &QuarkOrUC{Addition: Addition{Cookie: "cookie-secret"}}
 	if _, err := d.checkin(); err == nil || !strings.Contains(err.Error(), "cap_sign") {
 		t.Fatalf("expected missing cap_sign error, got %v", err)
+	}
+}
+
+type fakeQuarkCheckinScheduler struct {
+	job     func()
+	stopped bool
+}
+
+func (f *fakeQuarkCheckinScheduler) Do(job func()) { f.job = job }
+func (f *fakeQuarkCheckinScheduler) Stop()         { f.stopped = true }
+
+func TestStartCheckinEnabledQuarkReplacesScheduler(t *testing.T) {
+	quarkCheckinSeamMu.Lock()
+	originalFactory := newQuarkCheckinScheduler
+	originalLaunch := launchQuarkCheckin
+	var gotInterval time.Duration
+	newScheduler := &fakeQuarkCheckinScheduler{}
+	newQuarkCheckinScheduler = func(interval time.Duration) quarkCheckinScheduler {
+		gotInterval = interval
+		return newScheduler
+	}
+	launchCalls := 0
+	launchQuarkCheckin = func(job func()) { launchCalls++ }
+	t.Cleanup(func() {
+		newQuarkCheckinScheduler = originalFactory
+		launchQuarkCheckin = originalLaunch
+		quarkCheckinSeamMu.Unlock()
+	})
+
+	oldScheduler := &fakeQuarkCheckinScheduler{}
+	d := &QuarkOrUC{
+		Addition:         Addition{AutoCheckin: true},
+		config:           driver.Config{Name: "Quark"},
+		checkinScheduler: oldScheduler,
+	}
+	d.startCheckin()
+	if !oldScheduler.stopped || launchCalls != 1 || gotInterval != 24*time.Hour {
+		t.Fatalf("unexpected lifecycle state: oldStopped=%v launches=%d interval=%v", oldScheduler.stopped, launchCalls, gotInterval)
+	}
+	if d.checkinScheduler != newScheduler || newScheduler.job == nil {
+		t.Fatal("expected scheduled check-in job")
+	}
+	if err := d.Drop(context.Background()); err != nil {
+		t.Fatalf("drop driver: %v", err)
+	}
+	if !newScheduler.stopped || d.checkinScheduler != nil {
+		t.Fatal("expected Drop to stop and clear scheduler")
+	}
+}
+
+func TestStartCheckinSkipsDisabledQuarkAndUC(t *testing.T) {
+	quarkCheckinSeamMu.Lock()
+	originalFactory := newQuarkCheckinScheduler
+	originalLaunch := launchQuarkCheckin
+	factoryCalls, launchCalls := 0, 0
+	newQuarkCheckinScheduler = func(interval time.Duration) quarkCheckinScheduler {
+		factoryCalls++
+		return &fakeQuarkCheckinScheduler{}
+	}
+	launchQuarkCheckin = func(job func()) { launchCalls++ }
+	t.Cleanup(func() {
+		newQuarkCheckinScheduler = originalFactory
+		launchQuarkCheckin = originalLaunch
+		quarkCheckinSeamMu.Unlock()
+	})
+
+	cases := []QuarkOrUC{
+		{Addition: Addition{AutoCheckin: false}, config: driver.Config{Name: "Quark"}},
+		{Addition: Addition{AutoCheckin: true}, config: driver.Config{Name: "UC"}},
+	}
+	for i := range cases {
+		cases[i].startCheckin()
+		if cases[i].checkinScheduler != nil {
+			t.Fatalf("case %d unexpectedly created scheduler", i)
+		}
+	}
+	if factoryCalls != 0 || launchCalls != 0 {
+		t.Fatalf("unexpected calls: factory=%d launch=%d", factoryCalls, launchCalls)
 	}
 }
