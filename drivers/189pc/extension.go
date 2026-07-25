@@ -319,6 +319,93 @@ func (y *Cloud189PC) createTempDir(ctx context.Context) error {
 	return nil
 }
 
+const (
+	vipActivityID      = "ACT2025VIP2T"
+	vipPrizeID         = "2T_2025VIP"
+	greenActivityID    = "ACT2024cztx"
+	greenActivityPage  = "https://m.cloud.189.cn/zt/2024/green-task-system/index.html?uxChannel=10021132000"
+	maxActivityMessage = 256
+)
+
+var (
+	checkinAPIBaseURL    = API_URL
+	checkinMarketBaseURL = "https://m.cloud.189.cn"
+)
+
+type checkinMarketResponse struct {
+	Code    String `json:"code"`
+	Message string `json:"message"`
+	Msg     string `json:"msg"`
+}
+
+func activityResponseError(operation string, res *resty.Response, err error) error {
+	if err != nil {
+		return fmt.Errorf("%s request failed (%T)", operation, err)
+	}
+	if res == nil {
+		return fmt.Errorf("%s returned no response", operation)
+	}
+	if res.IsError() {
+		return fmt.Errorf("%s returned HTTP %d", operation, res.StatusCode())
+	}
+	return nil
+}
+
+func safeActivityMessage(message string, secrets ...string) string {
+	message = strings.TrimSpace(message)
+	for _, secret := range secrets {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "[redacted]")
+		}
+	}
+	if len(message) > maxActivityMessage {
+		message = message[:maxActivityMessage] + "..."
+	}
+	return message
+}
+
+func marketResponseMessage(resp checkinMarketResponse) string {
+	if resp.Message != "" {
+		return resp.Message
+	}
+	return resp.Msg
+}
+
+func alreadyCompletedActivity(message string) bool {
+	return strings.Contains(message, "已领取") ||
+		strings.Contains(message, "已完成") ||
+		strings.Contains(message, "已签到") ||
+		strings.Contains(message, "重复")
+}
+
+func (y *Cloud189PC) claimVIPSpace() error {
+	token := y.getTokenInfo()
+	if token == nil || token.SessionKey == "" {
+		return errors.New("VIP space claim requires a session key")
+	}
+
+	var result checkinMarketResponse
+	res, err := y.getClient().R().
+		SetResult(&result).
+		SetQueryParams(map[string]string{
+			"noCache":    strconv.FormatInt(time.Now().UnixMilli(), 10),
+			"activityId": vipActivityID,
+			"sessionKey": token.SessionKey,
+			"prizeId":    vipPrizeID,
+		}).
+		Get(checkinMarketBaseURL + "/market/drawTargetSpace.action")
+	if err := activityResponseError("VIP space claim", res, err); err != nil {
+		return err
+	}
+
+	message := safeActivityMessage(marketResponseMessage(result), token.SessionKey)
+	if string(result.Code) == "0" || alreadyCompletedActivity(message) {
+		log.Infof("[%v] VIP monthly space: %s", y.ID, message)
+		return nil
+	}
+	return fmt.Errorf("VIP monthly space rejected: %s", message)
+}
+
 func (y *Cloud189PC) Checkin() {
 	if !y.AutoCheckin {
 		return

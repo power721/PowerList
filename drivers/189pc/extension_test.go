@@ -5,7 +5,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +24,24 @@ import (
 )
 
 var linkSeamMu sync.Mutex
+var checkinSeamMu sync.Mutex
+
+func useCheckinMarketServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	checkinSeamMu.Lock()
+	server := httptest.NewServer(handler)
+	originalAPIURL := checkinAPIBaseURL
+	originalMarketURL := checkinMarketBaseURL
+	checkinAPIBaseURL = server.URL
+	checkinMarketBaseURL = server.URL
+	t.Cleanup(func() {
+		checkinAPIBaseURL = originalAPIURL
+		checkinMarketBaseURL = originalMarketURL
+		server.Close()
+		checkinSeamMu.Unlock()
+	})
+	return server
+}
 
 type stubFileStreamer struct {
 	utils.Closers
@@ -581,5 +602,63 @@ func TestCollectTransferredShareCandidates_PreservesExactMatchAndDiagnostics(t *
 	}
 	if !reflect.DeepEqual(candidates, wantCandidates) {
 		t.Fatalf("unexpected candidates:\nwant: %#v\ngot:  %#v", wantCandidates, candidates)
+	}
+}
+
+func TestClaimVIPSpaceSendsRequiredParameters(t *testing.T) {
+	var got url.Values
+	useCheckinMarketServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/market/drawTargetSpace.action" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		got = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"code":"0","message":"成功"}`)
+	}))
+
+	driver := &Cloud189PC{
+		Storage:   model.Storage{ID: 189},
+		client:    resty.New(),
+		tokenInfo: &AppSessionResp{UserSessionResp: UserSessionResp{SessionKey: "session-key"}},
+	}
+
+	if err := driver.claimVIPSpace(); err != nil {
+		t.Fatalf("claim VIP space: %v", err)
+	}
+	if got.Get("activityId") != vipActivityID || got.Get("prizeId") != vipPrizeID {
+		t.Fatalf("unexpected VIP parameters: %v", got)
+	}
+	if got.Get("sessionKey") != "session-key" {
+		t.Fatalf("expected session key, got %q", got.Get("sessionKey"))
+	}
+	if got.Get("noCache") == "" {
+		t.Fatal("expected cache-busting timestamp")
+	}
+}
+
+func TestClaimVIPSpaceTreatsAlreadyClaimedAsComplete(t *testing.T) {
+	useCheckinMarketServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"code":"1","message":"本月已领取"}`)
+	}))
+	driver := &Cloud189PC{
+		client:    resty.New(),
+		tokenInfo: &AppSessionResp{UserSessionResp: UserSessionResp{SessionKey: "session-key"}},
+	}
+	if err := driver.claimVIPSpace(); err != nil {
+		t.Fatalf("already claimed VIP space should be complete: %v", err)
+	}
+}
+
+func TestSafeActivityMessageRedactsSecretsAndBoundsOutput(t *testing.T) {
+	secret := "access-token-secret"
+	got := safeActivityMessage("request echoed "+secret, secret)
+	if got != "request echoed [redacted]" {
+		t.Fatalf("unexpected redaction result %q", got)
+	}
+
+	got = safeActivityMessage(strings.Repeat("x", maxActivityMessage+20), secret)
+	if len(got) != maxActivityMessage+3 || !strings.HasSuffix(got, "...") {
+		t.Fatalf("expected bounded activity message, got length %d and value %q", len(got), got)
 	}
 }
