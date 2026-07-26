@@ -1,12 +1,14 @@
 package baidu_netdisk
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 )
@@ -200,5 +202,76 @@ func TestBaiduDailyQuestionRejectsMissingIdentifiers(t *testing.T) {
 	_, _, err := (&BaiduNetdisk{Addition: Addition{Cookie: "BDUSS=secret"}}).getDailyQuestion()
 	if err == nil || !strings.Contains(err.Error(), "ask_id") {
 		t.Fatalf("expected missing ask_id error, got %v", err)
+	}
+}
+
+type fakeBaiduCheckinScheduler struct {
+	job     func()
+	stopped bool
+}
+
+func (f *fakeBaiduCheckinScheduler) Do(job func()) { f.job = job }
+func (f *fakeBaiduCheckinScheduler) Stop()         { f.stopped = true }
+
+func TestStartBaiduCheckinEnabledReplacesScheduler(t *testing.T) {
+	baiduCheckinSeamMu.Lock()
+	originalFactory := newBaiduCheckinScheduler
+	originalLaunch := launchBaiduCheckin
+	t.Cleanup(func() {
+		newBaiduCheckinScheduler = originalFactory
+		launchBaiduCheckin = originalLaunch
+		baiduCheckinSeamMu.Unlock()
+	})
+
+	var gotInterval time.Duration
+	newScheduler := &fakeBaiduCheckinScheduler{}
+	newBaiduCheckinScheduler = func(interval time.Duration) baiduCheckinScheduler {
+		gotInterval = interval
+		return newScheduler
+	}
+	launchCalls := 0
+	launchBaiduCheckin = func(job func()) { launchCalls++ }
+
+	oldScheduler := &fakeBaiduCheckinScheduler{}
+	d := &BaiduNetdisk{
+		Addition:         Addition{AutoCheckin: true},
+		checkinScheduler: oldScheduler,
+	}
+	d.startCheckin()
+	if !oldScheduler.stopped || launchCalls != 1 || gotInterval != 24*time.Hour {
+		t.Fatalf("unexpected lifecycle: oldStopped=%v launches=%d interval=%v", oldScheduler.stopped, launchCalls, gotInterval)
+	}
+	if d.checkinScheduler != newScheduler || newScheduler.job == nil {
+		t.Fatal("expected replacement scheduler with a job")
+	}
+	if err := d.Drop(context.Background()); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	if !newScheduler.stopped || d.checkinScheduler != nil {
+		t.Fatal("expected Drop to stop and clear scheduler")
+	}
+}
+
+func TestStartBaiduCheckinDisabledDoesNothing(t *testing.T) {
+	baiduCheckinSeamMu.Lock()
+	originalFactory := newBaiduCheckinScheduler
+	originalLaunch := launchBaiduCheckin
+	t.Cleanup(func() {
+		newBaiduCheckinScheduler = originalFactory
+		launchBaiduCheckin = originalLaunch
+		baiduCheckinSeamMu.Unlock()
+	})
+
+	factoryCalls, launchCalls := 0, 0
+	newBaiduCheckinScheduler = func(interval time.Duration) baiduCheckinScheduler {
+		factoryCalls++
+		return &fakeBaiduCheckinScheduler{}
+	}
+	launchBaiduCheckin = func(job func()) { launchCalls++ }
+
+	d := &BaiduNetdisk{Addition: Addition{AutoCheckin: false}}
+	d.startCheckin()
+	if d.checkinScheduler != nil || factoryCalls != 0 || launchCalls != 0 {
+		t.Fatalf("disabled check-in started work: scheduler=%v factory=%d launch=%d", d.checkinScheduler, factoryCalls, launchCalls)
 	}
 }

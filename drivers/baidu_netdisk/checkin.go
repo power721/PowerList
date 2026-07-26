@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
+	"github.com/OpenListTeam/OpenList/v4/pkg/cron"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
 )
@@ -15,6 +17,7 @@ import (
 const (
 	baiduActivityProductionURL = "https://pan.baidu.com"
 	baiduActivityMessageLimit  = 256
+	baiduCheckinInterval       = 24 * time.Hour
 )
 
 var (
@@ -252,4 +255,34 @@ func (d *BaiduNetdisk) executeCheckin() {
 		return
 	}
 	d.logActivityResult("daily answer", result)
+}
+
+type baiduCheckinScheduler interface {
+	Do(func())
+	Stop()
+}
+
+var (
+	newBaiduCheckinScheduler = func(interval time.Duration) baiduCheckinScheduler {
+		return cron.NewCron(interval)
+	}
+	launchBaiduCheckin = func(job func()) { go job() }
+)
+
+func (d *BaiduNetdisk) stopCheckin() {
+	if d.checkinScheduler != nil {
+		d.checkinScheduler.Stop()
+		d.checkinScheduler = nil
+	}
+}
+
+func (d *BaiduNetdisk) startCheckin() {
+	d.stopCheckin()
+	if !d.AutoCheckin {
+		return
+	}
+	job := d.executeCheckin
+	launchBaiduCheckin(job)
+	d.checkinScheduler = newBaiduCheckinScheduler(baiduCheckinInterval)
+	d.checkinScheduler.Do(job)
 }

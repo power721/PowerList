@@ -32,8 +32,9 @@ type BaiduNetdisk struct {
 	model.Storage
 	Addition
 
-	uploadThread int
-	vipType      int // 会员类型，0普通用户(4G/4M)、1普通会员(10G/16M)、2超级会员(20G/32M)
+	uploadThread     int
+	vipType          int // 会员类型，0普通用户(4G/4M)、1普通会员(10G/16M)、2超级会员(20G/32M)
+	checkinScheduler baiduCheckinScheduler
 
 	UK        int64
 	TempDirId string
@@ -51,6 +52,7 @@ func (d *BaiduNetdisk) GetAddition() driver.Additional {
 }
 
 func (d *BaiduNetdisk) Init(ctx context.Context) error {
+	d.stopCheckin()
 	d.uploadThread, _ = strconv.Atoi(d.UploadThread)
 	if d.uploadThread < 1 {
 		d.uploadThread, d.UploadThread = 1, "1"
@@ -75,10 +77,15 @@ func (d *BaiduNetdisk) Init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return d.createTempDir()
+	if err := d.createTempDir(); err != nil {
+		return err
+	}
+	d.startCheckin()
+	return nil
 }
 
 func (d *BaiduNetdisk) Drop(ctx context.Context) error {
+	d.stopCheckin()
 	return nil
 }
 
