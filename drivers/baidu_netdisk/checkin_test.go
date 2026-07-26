@@ -109,3 +109,96 @@ func TestBaiduMembershipSigninRejectsMalformedJSONWithoutLeakingCookie(t *testin
 		t.Fatalf("Cookie leaked in decode error: %v", err)
 	}
 }
+
+func TestBaiduDailyQuestionSubmitsDecodedAnswer(t *testing.T) {
+	var submitted bool
+	useBaiduActivityServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/act/v2/membergrowv2/getdailyquestion":
+			_, _ = io.WriteString(w, `{"errno":0,"data":{"ask_id":12345,"answer":2}}`)
+		case "/act/v2/membergrowv2/answerquestion":
+			query := r.URL.Query()
+			if query.Get("app_id") != "250528" || query.Get("web") != "5" || query.Get("ask_id") != "12345" || query.Get("answer") != "2" {
+				t.Fatalf("unexpected answer query %v", query)
+			}
+			submitted = true
+			_, _ = io.WriteString(w, `{"errno":0,"data":{"score":5}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	d := &BaiduNetdisk{Addition: Addition{Cookie: "BDUSS=secret"}}
+	answer, askID, err := d.getDailyQuestion()
+	if err != nil {
+		t.Fatalf("get daily question: %v", err)
+	}
+	result, err := d.answerDailyQuestion(answer, askID)
+	if err != nil {
+		t.Fatalf("answer daily question: %v", err)
+	}
+	if !submitted || result.Points != 5 {
+		t.Fatalf("unexpected answer result: submitted=%v result=%+v", submitted, result)
+	}
+}
+
+func TestBaiduDailyQuestionTreatsAlreadyAnsweredAsSuccess(t *testing.T) {
+	useBaiduActivityServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"show_msg":"今日已回答，次数已用完"}`)
+	}))
+
+	result, err := (&BaiduNetdisk{Addition: Addition{Cookie: "BDUSS=secret"}}).answerDailyQuestion(2, 12345)
+	if err != nil {
+		t.Fatalf("already answered: %v", err)
+	}
+	if !result.AlreadyComplete {
+		t.Fatalf("expected idempotent success, got %+v", result)
+	}
+}
+
+func TestExecuteBaiduCheckinContinuesToQuestionAfterSigninFailure(t *testing.T) {
+	var paths []string
+	useBaiduActivityServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/rest/2.0/membership/level":
+			w.WriteHeader(http.StatusBadGateway)
+		case "/act/v2/membergrowv2/getdailyquestion":
+			_, _ = io.WriteString(w, `{"data":{"ask_id":7,"answer":1}}`)
+		case "/act/v2/membergrowv2/answerquestion":
+			_, _ = io.WriteString(w, `{"data":{"score":3}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
+	(&BaiduNetdisk{Addition: Addition{Cookie: "BDUSS=secret"}}).executeCheckin()
+	want := []string{
+		"/rest/2.0/membership/level",
+		"/act/v2/membergrowv2/getdailyquestion",
+		"/act/v2/membergrowv2/answerquestion",
+	}
+	if len(paths) != len(want) {
+		t.Fatalf("unexpected paths: %v", paths)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Fatalf("unexpected paths: want=%v got=%v", want, paths)
+		}
+	}
+}
+
+func TestBaiduDailyQuestionRejectsMissingIdentifiers(t *testing.T) {
+	useBaiduActivityServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"answer":2}}`)
+	}))
+
+	_, _, err := (&BaiduNetdisk{Addition: Addition{Cookie: "BDUSS=secret"}}).getDailyQuestion()
+	if err == nil || !strings.Contains(err.Error(), "ask_id") {
+		t.Fatalf("expected missing ask_id error, got %v", err)
+	}
+}

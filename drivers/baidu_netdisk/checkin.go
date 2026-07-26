@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/go-resty/resty/v2"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -70,6 +72,29 @@ func (r baiduActivityResponse) activityPoints() *int {
 		return r.Data.Points
 	}
 	return nil
+}
+
+func (r baiduActivityResponse) activityScore() *int {
+	if r.Score != nil {
+		return r.Score
+	}
+	if r.Data != nil {
+		return r.Data.Score
+	}
+	return nil
+}
+
+func (r baiduActivityResponse) questionValues() (answer, askID *int64) {
+	answer, askID = r.Answer, r.AskID
+	if r.Data != nil {
+		if answer == nil {
+			answer = r.Data.Answer
+		}
+		if askID == nil {
+			askID = r.Data.AskID
+		}
+	}
+	return answer, askID
 }
 
 func baiduActivitySecrets(cookie string) []string {
@@ -155,4 +180,76 @@ func (d *BaiduNetdisk) membershipSignin() (baiduActivityResult, error) {
 		message = "response omitted points"
 	}
 	return baiduActivityResult{}, fmt.Errorf("Baidu membership sign-in rejected: %s", message)
+}
+
+func (d *BaiduNetdisk) getDailyQuestion() (answer, askID int64, err error) {
+	var response baiduActivityResponse
+	err = d.activityRequest("/act/v2/membergrowv2/getdailyquestion", map[string]string{
+		"app_id": "250528",
+		"web":    "5",
+	}, &response)
+	if err != nil {
+		return 0, 0, err
+	}
+	answerValue, askIDValue := response.questionValues()
+	if answerValue == nil {
+		return 0, 0, errors.New("Baidu daily question omitted answer")
+	}
+	if askIDValue == nil {
+		return 0, 0, errors.New("Baidu daily question omitted ask_id")
+	}
+	return *answerValue, *askIDValue, nil
+}
+
+func (d *BaiduNetdisk) answerDailyQuestion(answer, askID int64) (baiduActivityResult, error) {
+	var response baiduActivityResponse
+	err := d.activityRequest("/act/v2/membergrowv2/answerquestion", map[string]string{
+		"app_id": "250528",
+		"web":    "5",
+		"ask_id": strconv.FormatInt(askID, 10),
+		"answer": strconv.FormatInt(answer, 10),
+	}, &response)
+	if err != nil {
+		return baiduActivityResult{}, err
+	}
+	if score := response.activityScore(); score != nil {
+		return baiduActivityResult{Points: *score}, nil
+	}
+	message := safeBaiduActivityMessage(response.activityMessage(), d.Cookie)
+	if containsBaiduActivityKeyword(message, "已回答", "exceeded", "超出", "超限") {
+		return baiduActivityResult{AlreadyComplete: true}, nil
+	}
+	if message == "" {
+		message = "response omitted score"
+	}
+	return baiduActivityResult{}, fmt.Errorf("Baidu daily answer rejected: %s", message)
+}
+
+func (d *BaiduNetdisk) logActivityResult(name string, result baiduActivityResult) {
+	if result.AlreadyComplete {
+		log.Infof("[%d] Baidu %s already complete", d.ID, name)
+		return
+	}
+	log.Infof("[%d] Baidu %s complete: +%d points", d.ID, name, result.Points)
+}
+
+func (d *BaiduNetdisk) executeCheckin() {
+	result, err := d.membershipSignin()
+	if err != nil {
+		log.Warnf("[%d] Baidu membership check-in failed: %v", d.ID, err)
+	} else {
+		d.logActivityResult("membership check-in", result)
+	}
+
+	answer, askID, err := d.getDailyQuestion()
+	if err != nil {
+		log.Warnf("[%d] Baidu daily question failed: %v", d.ID, err)
+		return
+	}
+	result, err = d.answerDailyQuestion(answer, askID)
+	if err != nil {
+		log.Warnf("[%d] Baidu daily answer failed: %v", d.ID, err)
+		return
+	}
+	d.logActivityResult("daily answer", result)
 }
