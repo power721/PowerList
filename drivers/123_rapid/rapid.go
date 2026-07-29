@@ -85,9 +85,9 @@ func RapidTo123(ctx context.Context, src Source) (*model.Link, error) {
 		return nil, errors.New("rapid: invalid source (need name/size/hash)")
 	}
 
-	// 命中缓存:分享仍有效就直接免登录解析。
+	// 命中缓存:优先免登录分享直链,失败(如 5112)回退 Open 账号个人下载。
 	if e, ok := rapidCache.Get(src.cacheKey()); ok && e != nil {
-		if link, err := resolveAnonShareLink(e.shareKey, e.pwd, e.fileID); err == nil && link != nil {
+		if link := resolve123Link(firstOpen123(), e); link != nil {
 			return link, nil
 		}
 	}
@@ -124,28 +124,54 @@ func RapidTo123(ctx context.Context, src Source) (*model.Link, error) {
 			continue
 		}
 
-		share, err := open.CreateShare(fileID, src.Name, shareExpire)
-		if err != nil || share == nil || share.Data.ShareKey == "" {
-			lastErr = fmt.Errorf("rapid: create share failed: %w", err)
-			log.Warnf("[rapid-to-123] CreateShare failed (%s/%s): %v", open123DriverName, src.Name, err)
-			continue
+		// 建分享用于免登录解析;失败不致命(免费账号分享流量为 0 会 5112,改走个人下载)。
+		entry := &rapidEntry{fileID: fileID}
+		if share, err := open.CreateShare(fileID, src.Name, shareExpire); err == nil && share != nil && share.Data.ShareKey != "" {
+			entry.shareKey = share.Data.ShareKey
+			entry.pwd = share.Data.SharePwd
+		} else {
+			log.Warnf("[rapid-to-123] CreateShare failed, will use personal download (%s): %v", src.Name, err)
 		}
-		entry := &rapidEntry{fileID: fileID, shareKey: share.Data.ShareKey, pwd: share.Data.SharePwd}
 		rapidCache.Set(src.cacheKey(), entry)
 
-		link, err := resolveAnonShareLink(entry.shareKey, entry.pwd, fileID)
-		if err != nil || link == nil {
-			lastErr = fmt.Errorf("rapid: anon resolve failed: %w", err)
-			log.Warnf("[rapid-to-123] anon resolve failed (%s/%s): %v", open123DriverName, src.Name, err)
-			return nil, lastErr
+		if link := resolve123Link(open, entry); link != nil {
+			log.Infof("[rapid-to-123] %s reuse hit (via share=%v)", src.Name, entry.shareKey != "")
+			return link, nil
 		}
-		log.Infof("[rapid-to-123] %s reuse hit → share %s", src.Name, entry.shareKey)
-		return link, nil
+		lastErr = errors.New("rapid: resolve link failed (anon share + personal download)")
+		log.Warnf("[rapid-to-123] resolve failed (%s/%s)", open123DriverName, src.Name)
 	}
 	if lastErr != nil {
 		return nil, lastErr
 	}
 	return nil, errNoOpen123
+}
+
+// firstOpen123 取首个 123 Open 账号(缓存命中回退个人下载时用)。
+func firstOpen123() *_123_open.Open123 {
+	s := op.GetFirstDriver(open123DriverName, 0)
+	if s == nil {
+		return nil
+	}
+	open, _ := s.(*_123_open.Open123)
+	return open
+}
+
+// resolve123Link 对齐 JS tryResolveA123PlayableUrl 的兜底链:
+// 1) 免登录分享直链(share/download/info);2) 失败(含 5112 分享流量不足)回退 Open 账号个人 download_info(不走分享流量)。
+func resolve123Link(open *_123_open.Open123, entry *rapidEntry) *model.Link {
+	if entry.shareKey != "" {
+		if link, err := resolveAnonShareLink(entry.shareKey, entry.pwd, entry.fileID); err == nil && link != nil {
+			return link
+		}
+	}
+	if open != nil {
+		if dl, err := open.DownloadURL(entry.fileID); err == nil && dl != "" {
+			exp := 30 * time.Minute
+			return &model.Link{URL: dl, Expiration: &exp}
+		}
+	}
+	return nil
 }
 
 var (

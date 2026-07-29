@@ -7,6 +7,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/go-resty/resty/v2"
+	log "github.com/sirupsen/logrus"
 )
 
 type GuangYaPan struct {
@@ -222,18 +224,68 @@ func (d *GuangYaPan) Link(ctx context.Context, file model.Obj, args model.LinkAr
 }
 
 // GetFileDetail 通过 /userres/v1/file/get_file_detail 读取文件 md5,用于跨盘秒传到 123。
+// 光鸭 detail 返回结构多变(md5 可能挂在 fileInfo/data 不同层级或不同键名),故取原始响应
+// 递归查找 32 位 hex(md5);找不到时打 debug 日志便于诊断,调用方静默回退光鸭直链。
 func (d *GuangYaPan) GetFileDetail(ctx context.Context, fileId string) (string, error) {
-	var resp fileDetailResp
-	if err := d.postAPI(ctx, "/userres/v1/file/get_file_detail", map[string]any{"fileId": fileId}, &resp); err != nil {
+	if strings.TrimSpace(d.AccessToken) == "" {
+		return "", errors.New("access token is empty")
+	}
+	resp, err := d.apiClient.R().
+		SetContext(ctx).
+		SetHeader("Authorization", "Bearer "+d.AccessToken).
+		SetBody(map[string]any{"fileId": fileId}).
+		Post("/userres/v1/file/get_file_detail")
+	if err != nil {
 		return "", err
 	}
-	for _, h := range []string{resp.Data.FileInfo.Md5, resp.Data.FileInfo.Etag, resp.Data.FileInfo.Hash, resp.Data.Md5, resp.Data.Etag} {
-		h = strings.ToLower(strings.TrimSpace(h))
-		if len(h) == utils.MD5.Width {
-			return h, nil
-		}
+	body := resp.Body()
+	log.Debugf("[guangya] get_file_detail(%s): %s", fileId, string(body))
+	if md5 := findMd5InJSON(body); md5 != "" {
+		return md5, nil
 	}
 	return "", fmt.Errorf("file_detail 无可用 md5 (fileId=%s)", fileId)
+}
+
+// findMd5InJSON 递归遍历 JSON,返回第一个 32 位小写 hex 字符串(光鸭 detail 里即为 md5;
+// gcid/sha1 为 40 位,不会误匹配)。
+func findMd5InJSON(body []byte) string {
+	var v any
+	if err := json.Unmarshal(body, &v); err != nil {
+		return ""
+	}
+	var result string
+	var walk func(x any)
+	walk = func(x any) {
+		if result != "" {
+			return
+		}
+		switch t := x.(type) {
+		case map[string]any:
+			for _, val := range t {
+				walk(val)
+			}
+		case []any:
+			for _, val := range t {
+				walk(val)
+			}
+		case string:
+			s := strings.ToLower(strings.TrimSpace(t))
+			if len(s) == utils.MD5.Width {
+				isHex := true
+				for _, c := range s {
+					if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+						isHex = false
+						break
+					}
+				}
+				if isHex {
+					result = s
+				}
+			}
+		}
+	}
+	walk(v)
+	return result
 }
 
 func (d *GuangYaPan) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {

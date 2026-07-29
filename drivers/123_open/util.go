@@ -177,6 +177,17 @@ func (d *Open123) getDownloadInfo(fileId int64) (*DownloadInfoResp, error) {
 	return &resp, nil
 }
 
+// DownloadURL 取账号个人盘文件的下载直链(/api/v1/file/download_info,鉴权)。
+// 供 drivers/123_rapid 在免登录分享直链被 5112(分享流量包不足)挡住时回退使用——
+// 个人文件下载不走分享流量,不受 5112 限制。
+func (d *Open123) DownloadURL(fileID int64) (string, error) {
+	resp, err := d.getDownloadInfo(fileID)
+	if err != nil {
+		return "", err
+	}
+	return resp.Data.DownloadUrl, nil
+}
+
 func (d *Open123) getDirectLink(fileId int64) (*DirectLinkResp, error) {
 	var resp DirectLinkResp
 
