@@ -35,6 +35,7 @@ var ( // 不同情况下获取的AccessTokenQPS限制不同 如下模块化易�
 
 	OfflineDownload        = InitApiInfo(Api+"/api/v1/offline/download", 1)
 	OfflineDownloadProcess = InitApiInfo(Api+"/api/v1/offline/download/process", 5)
+	ShareCreate            = InitApiInfo(Api+"/api/v1/share/create", 1)
 )
 
 func (d *Open123) Request(apiInfo *ApiInfo, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
@@ -244,6 +245,26 @@ func (d *Open123) trash(fileId int64) error {
 	}
 
 	return nil
+}
+
+// CreateShare 对指定文件创建公开分享,供后续免登录解析直链。
+// 123 Open 要求 fileIdList 为逗号分隔字符串(传数组会返回"分享ID非法")。shareExpire<=0 永久。
+func (d *Open123) CreateShare(fileID int64, shareName string, shareExpire int) (*ShareCreateResp, error) {
+	if shareExpire < 0 {
+		shareExpire = 0
+	}
+	var resp ShareCreateResp
+	_, err := d.Request(ShareCreate, http.MethodPost, func(req *resty.Request) {
+		req.SetBody(base.Json{
+			"fileIdList":  strconv.FormatInt(fileID, 10),
+			"shareName":   shareName,
+			"shareExpire": shareExpire,
+		})
+	}, &resp)
+	if err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 func (d *Open123) createOfflineDownloadTask(ctx context.Context, url string, dirID, callback string) (taskID int, err error) {

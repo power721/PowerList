@@ -71,6 +71,21 @@ type downloadResp struct {
 	} `json:"data"`
 }
 
+// fileDetailResp /userres/v1/file/get_file_detail(兼容 md5 在 fileInfo 或 data 直挂两种形态)。
+type fileDetailResp struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		Md5      string `json:"md5"`
+		Etag     string `json:"etag"`
+		FileInfo struct {
+			Md5  string `json:"md5"`
+			Etag string `json:"etag"`
+			Hash string `json:"hash"`
+		} `json:"fileInfo"`
+	} `json:"data"`
+}
+
 type createDirResp struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`

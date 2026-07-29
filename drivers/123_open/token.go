@@ -4,11 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
+	jsoniter "github.com/json-iterator/go"
 )
 
 var (
@@ -48,6 +52,64 @@ func (d *Open123) getAccessToken(forceRefresh bool) (string, error) {
 }
 
 func (d *Open123) flushAccessToken() error {
+	// OAuthProxy:用户无自有 client_id,经 oauth 代理刷新(扫码授权的 refresh_token)。
+	// 代理地址由消费端通过 OAuthServer 传入,留空时回退默认。
+	if d.OAuthProxy && d.RefreshToken != "" {
+		oauthServer := strings.TrimSpace(d.OAuthServer)
+		if oauthServer == "" {
+			oauthServer = "https://oauth.litepan.top"
+		}
+		oauthRefreshURL := strings.TrimRight(oauthServer, "/") + "/api/oauth/refresh"
+		resp, err := base.RestyClient.R().
+			SetHeader("Content-Type", "application/json").
+			SetBody(base.Json{"driver_type": "123云盘Open", "refresh_token": d.RefreshToken}).
+			Post(oauthRefreshURL)
+		if err != nil {
+			return err
+		}
+		body := resp.Body()
+		at := jsoniter.Get(body, "data", "access_token").ToString()
+		if at == "" {
+			at = jsoniter.Get(body, "data", "token_data", "access_token").ToString()
+		}
+		if at == "" {
+			at = jsoniter.Get(body, "access_token").ToString()
+		}
+		if at == "" {
+			msg := jsoniter.Get(body, "message").ToString()
+			if msg == "" {
+				msg = jsoniter.Get(body, "data", "error").ToString()
+			}
+			if msg == "" {
+				msg = "empty access_token from oauth proxy"
+			}
+			return fmt.Errorf("123 open oauth refresh failed: %s", msg)
+		}
+		rt := jsoniter.Get(body, "data", "refresh_token").ToString()
+		if rt == "" {
+			rt = jsoniter.Get(body, "refresh_token").ToString()
+		}
+		if rt == "" {
+			rt = d.RefreshToken
+		}
+		ei := jsoniter.Get(body, "data", "expires_in").ToInt()
+		if ei <= 0 {
+			ei = jsoniter.Get(body, "expires_in").ToInt()
+		}
+		expiredAt, err := expiresInToExpiredAt(int64(ei))
+		if err != nil {
+			return err
+		}
+		d.AccessToken = at
+		d.RefreshToken = rt
+		d.tm.expiredAt = expiredAt
+		op.MustSaveDriverStorage(d)
+		// 同步(可能轮换的)refresh_token 回 alist-tvbox,避免其重启后用旧 refresh_token。
+		token.SaveAccountToken(conf.OPEN123, d.RefreshToken, int(d.ID))
+		d.tm.blockRefresh = false
+		return nil
+	}
+
 	// Official app renewapi response contains access_token, refresh_token and expires_in.
 	if d.UseOnlineAPI && d.RefreshToken != "" && len(d.APIAddress) > 0 {
 		var resp RefreshTokenResp

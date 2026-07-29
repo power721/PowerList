@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	_123rapid "github.com/OpenListTeam/OpenList/v4/drivers/123_rapid"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/drivers/guangyapan"
 	"github.com/OpenListTeam/OpenList/v4/internal/cache"
@@ -20,6 +21,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
 )
@@ -202,15 +204,47 @@ func (d *GuangYaPanShare) link(ctx context.Context, file model.Obj, args model.L
 		return nil, err
 	}
 
+	// 临时文件无论最终走 123 还是原链,都延迟清理。
+	go d.delete(ctx, restored, account)
+
+	// 123 优先:开关开启时,用 restore 后文件的 md5 秒传到 123;成功返回 123 直链,失败回退原链。
+	if setting.GetBool(conf.GuangyaTo123) {
+		if link := rapidGuangyaTo123(ctx, account, restored); link != nil {
+			return link, nil
+		}
+	}
+
 	link, err := account.Link(ctx, restored, args)
 	if err != nil {
 		log.Infof("link error: %v", err)
 		return nil, err
 	}
 
-	go d.delete(ctx, restored, account)
-
 	return link, nil
+}
+
+// rapidGuangyaTo123 用 restore 后文件的 md5 秒传到 123。声明为 var 便于单测替换。
+var rapidGuangyaTo123 = func(ctx context.Context, account *guangyapan.GuangYaPan, restored model.Obj) *model.Link {
+	if account == nil || restored == nil {
+		return nil
+	}
+	md5, err := account.GetFileDetail(ctx, restored.GetID())
+	if err != nil || len(md5) != utils.MD5.Width {
+		log.Debugf("[guangya-share] rapid to 123 skipped (no md5): %v", err)
+		return nil
+	}
+	link, err := _123rapid.RapidTo123(ctx, _123rapid.Source{
+		HashType: utils.MD5,
+		Hash:     md5,
+		Name:     restored.GetName(),
+		Size:     restored.GetSize(),
+	})
+	if err != nil || link == nil {
+		log.Debugf("[guangya-share] rapid to 123 skipped: %v", err)
+		return nil
+	}
+	log.Infof("[guangya-share] 使用123秒传直链: %s", restored.GetName())
+	return link
 }
 
 func (d *GuangYaPanShare) delete(ctx context.Context, file model.Obj, bd *guangyapan.GuangYaPan) {

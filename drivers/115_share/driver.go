@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	_115 "github.com/OpenListTeam/OpenList/v4/drivers/115"
+	_123rapid "github.com/OpenListTeam/OpenList/v4/drivers/123_rapid"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	log "github.com/sirupsen/logrus"
+	"net/http"
 	"strings"
 	"time"
 
@@ -103,6 +104,12 @@ func (d *Pan115Share) List(ctx context.Context, dir model.Obj, args model.ListAr
 }
 
 func (d *Pan115Share) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	// 123 优先:开关开启时先按 SHA1 秒传到 123,失败/未命中回退现有「转存个人 115」取链。
+	if setting.GetBool(conf.Pan115To123) {
+		if link := rapid115To123(ctx, file); link != nil {
+			return link, nil
+		}
+	}
 	count := op.GetDriverCount("115 Cloud")
 	var lastErr error
 	for i := 0; i < count; i++ {
@@ -113,6 +120,26 @@ func (d *Pan115Share) Link(ctx context.Context, file model.Obj, args model.LinkA
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+// rapid115To123 把 115 分享文件按 SHA1 秒传到 123。声明为 var 便于单测替换。
+var rapid115To123 = func(ctx context.Context, file model.Obj) *model.Link {
+	parts := strings.Split(file.GetID(), "-")
+	if len(parts) < 2 {
+		return nil
+	}
+	link, err := _123rapid.RapidTo123(ctx, _123rapid.Source{
+		HashType: utils.SHA1,
+		Hash:     parts[1],
+		Name:     file.GetName(),
+		Size:     file.GetSize(),
+	})
+	if err != nil || link == nil {
+		log.Debugf("[115-share] rapid to 123 skipped: %v", err)
+		return nil
+	}
+	log.Infof("[115-share] 使用123秒传直链: %s", file.GetName())
+	return link
 }
 
 func (d *Pan115Share) link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
