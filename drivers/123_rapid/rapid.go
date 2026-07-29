@@ -136,6 +136,9 @@ func RapidTo123(ctx context.Context, src Source) (*model.Link, error) {
 
 		if link := resolve123Link(open, entry); link != nil {
 			log.Infof("[rapid-to-123] %s reuse hit (via share=%v)", src.Name, entry.shareKey != "")
+			// 新鲜秒传文件已落到 alist-tvbox-temp,延时清理(仅新鲜路径排程;
+			// 缓存命中由首次创建者排程;DeleteDelayTime=0 不清理)。
+			go open.DeleteDelay(entry.fileID)
 			return link, nil
 		}
 		lastErr = errors.New("rapid: resolve link failed (anon share + personal download)")

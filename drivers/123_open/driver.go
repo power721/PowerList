@@ -17,8 +17,9 @@ import (
 type Open123 struct {
 	model.Storage
 	Addition
-	UID uint64
-	tm  *tokenManager
+	UID       uint64
+	TempDirId int64 // alist-tvbox-temp 目录 fileId,秒传文件落点
+	tm        *tokenManager
 }
 
 func (d *Open123) Config() driver.Config {
@@ -59,6 +60,9 @@ func (d *Open123) Init(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("init get access token error: %w", err)
 	}
+
+	// best-effort:秒传临时目录查找/创建,失败不影响驱动启动。
+	d.GetTempFolder()
 
 	return nil
 }
