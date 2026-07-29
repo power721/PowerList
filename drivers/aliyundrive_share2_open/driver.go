@@ -3,6 +3,7 @@ package aliyundrive_share2_open
 import (
 	"context"
 	_115 "github.com/OpenListTeam/OpenList/v4/drivers/115"
+	_123rapid "github.com/OpenListTeam/OpenList/v4/drivers/123_rapid"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/cache"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -34,8 +35,35 @@ var aliyundriveShareAliTo115Enabled = func() bool {
 	return setting.GetBool(conf.AliTo115)
 }
 
+var aliyundriveShareAliTo123Enabled = func() bool {
+	return setting.GetBool(conf.AliTo123)
+}
+
+// rapidAliTo123 把阿里文件按 SHA1(content_hash)秒传到 123。声明为 var 便于单测替换。
+var rapidAliTo123 = func(ctx context.Context, file *MyFile) *model.Link {
+	if file == nil {
+		return nil
+	}
+	sha1 := file.HashInfo.GetHash(utils.SHA1)
+	if len(sha1) != utils.SHA1.Width {
+		return nil
+	}
+	link, err := _123rapid.RapidTo123(ctx, _123rapid.Source{
+		HashType: utils.SHA1,
+		Hash:     sha1,
+		Name:     file.Name,
+		Size:     file.Size,
+	})
+	if err != nil || link == nil {
+		log.Debugf("[ali-share] rapid to 123 skipped: %v", err)
+		return nil
+	}
+	log.Infof("[ali-share] 使用123秒传直链: %s", file.Name)
+	return link
+}
+
 func aliyundriveShareLinkCacheKey(fileID string) string {
-	return fileID + "|" + strconv.FormatBool(aliyundriveShareAliTo115Enabled())
+	return fileID + "|" + strconv.FormatBool(aliyundriveShareAliTo115Enabled()) + "|" + strconv.FormatBool(aliyundriveShareAliTo123Enabled())
 }
 
 var resolveAliyundriveShareLink = func(ctx context.Context, d *AliyundriveShare2Open, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -44,7 +72,16 @@ var resolveAliyundriveShareLink = func(ctx context.Context, d *AliyundriveShare2
 	for i := 0; i < count; i++ {
 		link, myFile, err := d.aliLink(file)
 		if err == nil {
-			if strings.HasSuffix(file.GetName(), ".md") || !aliyundriveShareAliTo115Enabled() {
+			if strings.HasSuffix(file.GetName(), ".md") {
+				return link, nil
+			}
+			// 123 优先:阿里 content_hash 即 SHA1,与 115 同构,直接喂 123 sha1_reuse;未命中回退 115/阿里。
+			if aliyundriveShareAliTo123Enabled() {
+				if l := rapidAliTo123(ctx, myFile); l != nil {
+					return l, nil
+				}
+			}
+			if !aliyundriveShareAliTo115Enabled() {
 				return link, nil
 			}
 

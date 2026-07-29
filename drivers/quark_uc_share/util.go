@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	_123rapid "github.com/OpenListTeam/OpenList/v4/drivers/123_rapid"
 	quark "github.com/OpenListTeam/OpenList/v4/drivers/quark_uc"
 	"github.com/OpenListTeam/OpenList/v4/drivers/quark_uc_tv"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -16,6 +17,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	"github.com/OpenListTeam/OpenList/v4/pkg/cookie"
+	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -90,6 +92,36 @@ func (d *QuarkUCShare) getDriverName() string {
 		name = "UC"
 	}
 	return name
+}
+
+// rapidTo123Enabled 按驱动类型(夸克/UC)选对应的「秒传到123」开关。
+func rapidTo123Enabled(d *QuarkUCShare) bool {
+	if d == nil {
+		return false
+	}
+	if d.getDriverName() == "UC" {
+		return setting.GetBool(conf.UCTo123)
+	}
+	return setting.GetBool(conf.QuarkTo123)
+}
+
+// rapidQuarkUCTo123 按 MD5 把夸克/UC 文件秒传到 123。声明为 var 便于单测替换。
+var rapidQuarkUCTo123 = func(name, md5 string, size int64) *model.Link {
+	if len(md5) != utils.MD5.Width {
+		return nil
+	}
+	link, err := _123rapid.RapidTo123(context.Background(), _123rapid.Source{
+		HashType: utils.MD5,
+		Hash:     md5,
+		Name:     name,
+		Size:     size,
+	})
+	if err != nil || link == nil {
+		log.Debugf("[quark-uc-share] rapid to 123 skipped: %v", err)
+		return nil
+	}
+	log.Infof("[quark-uc-share] 使用123秒传直链: %s", name)
+	return link
 }
 
 func (d *QuarkUCShare) request(pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
@@ -616,6 +648,16 @@ var resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link,
 		return nil, errors.New("empty share download url")
 	}
 	downloadUrl := resp.Data[0].DownloadUrl
+	// 123 优先:开关开启且响应带回 md5 时,按 MD5 秒传到 123;失败/未命中回退下面的免转存直链。
+	if rapidTo123Enabled(d) {
+		md5 := ""
+		if len(resp.Data) > 0 {
+			md5 = resp.Data[0].Md5
+		}
+		if link := rapidQuarkUCTo123(file.GetName(), md5, file.GetSize()); link != nil {
+			return link, nil
+		}
+	}
 	// 后端代理用此 Header(魔法 Referer)绕过 checkplay。
 	header := http.Header{
 		"User-Agent":      []string{d.conf.ua},

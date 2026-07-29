@@ -16,6 +16,12 @@ type Addition struct {
 	//  refresh_token方式的AccessToken  【对个人开发者暂未开放】
 	RefreshToken string `json:"RefreshToken" required:"false"`
 
+	// OAuthProxy:无自有 client_id 时,经 oauth 代理刷新(扫码授权拿到的 refresh_token)。
+	OAuthProxy bool `json:"OAuthProxy" required:"false" default:"false"`
+
+	// OAuthServer:oauth 代理地址(如 https://oauth.litepan.top),由消费端(alist-tvbox)传入。
+	OAuthServer string `json:"OAuthServer" required:"false"`
+
 	// 使用在线API
 	UseOnlineAPI bool   `json:"use_online_api" default:"true"`
 	APIAddress   string `json:"api_url_address" default:"https://api.oplist.org/123cloud/renewapi"`

@@ -36,12 +36,16 @@ func TestPan123ShareLink_AnonymousFirstReturnsAnonLink(t *testing.T) {
 }
 
 func TestPan123ShareLink_TrafficLimitShortCircuits(t *testing.T) {
-	// 5112 流量包不足:不回退账号,直接透传真实错误。
+	// 5112 流量包不足:秒传兜底也未命中时,不回退账号,直接透传真实错误。
 	origAnon := resolveAnonLink
 	resolveAnonLink = func(d *Pan123Share, f File, ip string) (*model.Link, error) {
 		return nil, err123TrafficLimit
 	}
 	t.Cleanup(func() { resolveAnonLink = origAnon })
+
+	origRapid := rapidShareTo123
+	rapidShareTo123 = func(f File) *model.Link { return nil }
+	t.Cleanup(func() { rapidShareTo123 = origRapid })
 
 	d := &Pan123Share{}
 	file := File{FileName: "video.mp4"}
@@ -49,5 +53,29 @@ func TestPan123ShareLink_TrafficLimitShortCircuits(t *testing.T) {
 	_, err := d.Link(context.Background(), file, model.LinkArgs{})
 	if !errors.Is(err, err123TrafficLimit) {
 		t.Fatalf("expected err123TrafficLimit, got %v", err)
+	}
+}
+
+func TestPan123ShareLink_TrafficLimitRapidFallback(t *testing.T) {
+	// 5112 时秒传兜底命中 → 返回秒传直链,不再透传错误。
+	origAnon := resolveAnonLink
+	resolveAnonLink = func(d *Pan123Share, f File, ip string) (*model.Link, error) {
+		return nil, err123TrafficLimit
+	}
+	t.Cleanup(func() { resolveAnonLink = origAnon })
+
+	origRapid := rapidShareTo123
+	rapidShareTo123 = func(f File) *model.Link { return &model.Link{URL: "https://example.com/rapid-123"} }
+	t.Cleanup(func() { rapidShareTo123 = origRapid })
+
+	d := &Pan123Share{}
+	file := File{FileName: "video.mp4"}
+
+	link, err := d.Link(context.Background(), file, model.LinkArgs{})
+	if err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	if link == nil || link.URL != "https://example.com/rapid-123" {
+		t.Fatalf("expected rapid fallback link, got %+v", link)
 	}
 }

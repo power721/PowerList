@@ -15,6 +15,7 @@ import (
 	"time"
 
 	_123 "github.com/OpenListTeam/OpenList/v4/drivers/123"
+	_123rapid "github.com/OpenListTeam/OpenList/v4/drivers/123_rapid"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
@@ -33,8 +34,9 @@ const (
 	DownloadInfo = MainApi + "/share/download/info"
 	//AuthKeySalt      = "8-8D$sL8gPjom7bk#cY"
 
-	// 匿名(免登录)通道:www.123pan.cn 的分享接口对公开分享可直接换直链,无需 Bearer/auth-key。
-	AnonOrigin       = "https://www.123pan.cn"
+	// 匿名(免登录)通道:yun.123pan.com 的分享接口对公开分享可直接换直链,无需 Bearer/auth-key。
+	// www.123pan.cn 已不再对该 API 提供 HTTPS(握手返回明文 HTTP),故改用 yun.123pan.com。
+	AnonOrigin       = "https://yun.123pan.com"
 	AnonDownloadInfo = AnonOrigin + "/b/api/share/download/info"
 	AnonUA           = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 )
@@ -173,6 +175,28 @@ func unwrap123DownloadLink(downloadUrl string) (*model.Link, error) {
 		"Referer": []string{fmt.Sprintf("%s://%s/", ou.Scheme, ou.Host)},
 	}
 	return link, nil
+}
+
+// rapidShareTo123 在分享方流量耗尽(err123TrafficLimit, 5112)时,按 MD5(Etag)把 123 分享文件
+// 秒传到 123 Open 账号并取个人下载直链(不走分享流量)。声明为 var 便于单测替换。
+// 参考 drivers/123_rapid/rapid.go(RapidTo123)与 drivers/quark_uc_share/util.go:rapidQuarkUCTo123;
+// 秒传文件落 alist-tvbox-temp 并延时清理(见 drivers/123_open/extension.go)。
+var rapidShareTo123 = func(f File) *model.Link {
+	if len(f.Etag) != utils.MD5.Width {
+		return nil
+	}
+	link, err := _123rapid.RapidTo123(context.Background(), _123rapid.Source{
+		HashType: utils.MD5,
+		Hash:     f.Etag,
+		Name:     f.FileName,
+		Size:     f.Size,
+	})
+	if err != nil || link == nil {
+		log.Debugf("[123_share] rapid to 123 skipped: %v", err)
+		return nil
+	}
+	log.Infof("[123_share] 使用123秒传直链(5112 兜底): %s", f.FileName)
+	return link
 }
 
 // anonDownloadLink 匿名换取 123 分享直链(无需 123Pan 账号)。

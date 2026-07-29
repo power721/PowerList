@@ -221,6 +221,22 @@ func (d *GuangYaPan) Link(ctx context.Context, file model.Obj, args model.LinkAr
 	}, nil
 }
 
+// GetFileDetail 通过 /userres/v1/file/get_file_detail 读取文件 md5,用于跨盘秒传到 123。
+// md5 固定在 data.fileInfo.md5(大写 hex);取不到说明该文件无 md5,调用方静默回退光鸭直链。
+func (d *GuangYaPan) GetFileDetail(ctx context.Context, fileId string) (string, error) {
+	var resp fileDetailResp
+	if err := d.postAPI(ctx, "/userres/v1/file/get_file_detail", map[string]any{"fileId": fileId}, &resp); err != nil {
+		return "", err
+	}
+	for _, h := range []string{resp.Data.FileInfo.Md5, resp.Data.Md5} {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if len(h) == utils.MD5.Width {
+			return h, nil
+		}
+	}
+	return "", fmt.Errorf("file_detail 无可用 md5 (fileId=%s)", fileId)
+}
+
 func (d *GuangYaPan) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
 	if err := d.ensureAccessToken(ctx); err != nil {
 		return err

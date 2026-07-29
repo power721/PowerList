@@ -80,7 +80,11 @@ func (d *Pan123Share) Link(ctx context.Context, file model.Obj, args model.LinkA
 		if link, err := resolveAnonLink(d, f, args.IP); err == nil {
 			return link, nil
 		} else if errors.Is(err, err123TrafficLimit) {
-			// 分享方流量耗尽,账号重试也无意义,直接返回真实原因。
+			// 分享方流量耗尽:按 MD5(Etag)秒传到 123 Open 账号走个人下载(不走分享流量),
+			// 参考 drivers/123_rapid/rapid.go;失败则透传真实错误。
+			if link := rapidShareTo123(f); link != nil {
+				return link, nil
+			}
 			return nil, err
 		}
 	}
