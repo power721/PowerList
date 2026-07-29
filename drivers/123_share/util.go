@@ -33,8 +33,9 @@ const (
 	DownloadInfo = MainApi + "/share/download/info"
 	//AuthKeySalt      = "8-8D$sL8gPjom7bk#cY"
 
-	// 匿名(免登录)通道:www.123pan.cn 的分享接口对公开分享可直接换直链,无需 Bearer/auth-key。
-	AnonOrigin       = "https://www.123pan.cn"
+	// 匿名(免登录)通道:yun.123pan.com 的分享接口对公开分享可直接换直链,无需 Bearer/auth-key。
+	// www.123pan.cn 已不再对该 API 提供 HTTPS(握手返回明文 HTTP),故改用 yun.123pan.com。
+	AnonOrigin       = "https://yun.123pan.com"
 	AnonDownloadInfo = AnonOrigin + "/b/api/share/download/info"
 	AnonUA           = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 )
