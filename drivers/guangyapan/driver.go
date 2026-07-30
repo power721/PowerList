@@ -16,10 +16,12 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/go-resty/resty/v2"
@@ -579,6 +581,8 @@ func (d *GuangYaPan) refreshToken(ctx context.Context) error {
 		d.RefreshToken = strings.TrimSpace(out.RefreshToken)
 	}
 	op.MustSaveDriverStorage(d)
+	// 同步(可能轮换的)refresh_token 回 alist-tvbox,避免其重启后用旧 refresh_token。镜像 drivers/123_open/token.go。
+	token.SaveAccountToken(conf.GUANGYA, d.RefreshToken, int(d.ID))
 	return nil
 }
 

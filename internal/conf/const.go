@@ -117,6 +117,7 @@ const (
 	BAIDU            = "BAIDU"
 	THUNDER          = "THUNDER"
 	UC_TV            = "UC_TV"
+	GUANGYA          = "GUANGYA"
 	AliTo115         = "ali_to_115"
 	AliTo123         = "ali_to_123"
 	Pan115To123      = "115_to_123"
