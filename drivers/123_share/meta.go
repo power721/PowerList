@@ -15,6 +15,9 @@ type Addition struct {
 	//OrderBy        string `json:"order_by" type:"select" options:"file_name,size,update_at" default:"file_name"`
 	//OrderDirection string `json:"order_direction" type:"select" options:"asc,desc" default:"asc"`
 	AccessToken string `json:"accesstoken" type:"text"`
+	// DisableUnlimited 关掉「无限直链」(share/get 已签名直链剥离缩略图标记),
+	// 退回 share/download/info。仅在 123 修补该通道导致直链 403 时才需要打开。
+	DisableUnlimited bool `json:"disable_unlimited" type:"bool" default:"false" help:"disable the unmetered direct link from share/get and always use share/download/info"`
 }
 
 var config = driver.Config{

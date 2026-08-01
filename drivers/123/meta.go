@@ -21,6 +21,9 @@ type Addition struct {
 	DeiveType    string `json:"devicetype" default:"M1810E5A"`
 	OsVersion    string `json:"osversion" default:"Android_8.1.0"`
 	LoginUuid    string `json:"loginuuid" default:""`
+	// DisableUnlimited 关掉「无限直链」(直接用文件列表里已签名的直链),退回 file/download_info。
+	// 仅在 123 修补该通道导致直链 403 时才需要打开。
+	DisableUnlimited bool `json:"disable_unlimited" type:"bool" default:"false" help:"disable the direct link taken from the file list and always use file/download_info"`
 }
 
 var config = driver.Config{
