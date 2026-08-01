@@ -26,7 +26,10 @@ type QuarkUCShare struct {
 	conf   Conf
 }
 
-var quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
+// 免转存直链是夸克/UC 的签名 CDN URL,夜间夸克收紧 checkplay 时易过期。
+// 缓存 2 分钟(对齐不夜 cloud-drive.js 的 120s 播放缓存):每次 miss 重新换一条新签名直链,
+// 既省掉重复换链开销,又避免服务到已失效的旧直链。
+var quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](2 * time.Minute)
 
 var resolveQuarkUCShareLink = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	name := d.getDriverName()

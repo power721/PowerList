@@ -56,6 +56,29 @@ func TestPan123ShareLink_TrafficLimitShortCircuits(t *testing.T) {
 	}
 }
 
+func TestPan123ShareList_AnonymousFirstReturnsAnonList(t *testing.T) {
+	// 无需 123Pan 账号:匿名列目录成功即返回,不走鉴权路径(getFilesAuth)。
+	orig := resolveAnonList
+	anonCalls := 0
+	resolveAnonList = func(d *Pan123Share, ctx context.Context, parentId string) ([]File, error) {
+		anonCalls++
+		return []File{{FileName: "anon.mp4", FileId: 7}}, nil
+	}
+	t.Cleanup(func() { resolveAnonList = orig })
+
+	d := &Pan123Share{}
+	files, err := d.List(context.Background(), File{}, model.ListArgs{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(files) != 1 || files[0].GetName() != "anon.mp4" {
+		t.Fatalf("expected anon list, got %+v", files)
+	}
+	if anonCalls != 1 {
+		t.Fatalf("expected anon resolver once, got %d", anonCalls)
+	}
+}
+
 func TestPan123ShareLink_TrafficLimitRapidFallback(t *testing.T) {
 	// 5112 时秒传兜底命中 → 返回秒传直链,不再透传错误。
 	origAnon := resolveAnonLink

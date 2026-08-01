@@ -159,6 +159,15 @@ func (d *QuarkUCShare) directRequest(cookieStr string, pathname string, method s
 	if err != nil {
 		return nil, err
 	}
+	// 429 限流: sleep 1s 后重试一次(对齐不夜【官盘】夸克网盘.js)。夜间夸克高峰限流时避免直接报错
+	// → 触发免转存↔转存互相兜底(转存任务轮询最多 12s)造成的拖慢。
+	if res.StatusCode() == http.StatusTooManyRequests {
+		time.Sleep(time.Second)
+		res, err = req.Execute(method, u)
+		if err != nil {
+			return nil, err
+		}
+	}
 	__puus := cookie.GetCookie(res.Cookies(), "__puus")
 	if __puus != nil {
 		log.Debugf("__puus: %v", __puus)
@@ -641,6 +650,19 @@ var resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link,
 			}, &resp)
 		}
 	}
+	// 空直链自愈: 强制刷新 stoken + 按 pid 重换 fid_token 后再试一次(对齐不夜 cloud-drive.js:4906-4923)。
+	// 夸克夜间 stoken/fid_token 易临时失效,刷新一次可救回,避免落入转存 12s 轮询兜底。
+	if err == nil && (len(resp.Data) == 0 || resp.Data[0].DownloadUrl == "") && pid != "" {
+		if te := d.getShareToken(); te == nil {
+			if newToken, e := d.getFileToken(nil, pid, fileId); e == nil && newToken != "" {
+				body["fids_token"] = []string{newToken}
+				body["stoken"] = d.ShareToken
+				_, err = d.directRequest(reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
+					req.SetBody(body)
+				}, &resp)
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -658,7 +680,24 @@ var resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link,
 			return link, nil
 		}
 	}
-	// 后端代理用此 Header(魔法 Referer)绕过 checkplay。
+	// 夸克 + 有主账号: alist-tvbox 服务器代理会注入 link.Header,用账号 Cookie + 正常 Referer 最稳,
+	// 夜间夸克收紧 checkplay 也不被拦(对齐不夜 cloud-drive.js:4683-4696,以及自家 quark_uc.getDownloadLink
+	// 的 drivers/quark_uc/util.go:155-159)。不再依赖魔法 Referer 片段标记。
+	if !isUC {
+		if mk := d.masterCookie(); mk != "" {
+			log.Infof("[%v] 免转存直链(账号Cookie) %v %v", d.getDriverName(), file.GetName(), file.GetSize())
+			return &model.Link{
+				URL: downloadUrl,
+				Header: http.Header{
+					"User-Agent": []string{d.conf.ua},
+					"Referer":    []string{d.conf.referer},
+					"Cookie":     []string{mk},
+				},
+			}, nil
+		}
+	}
+	// UC / 夸克无主账号: 维持免转存直链 + 魔法 Referer。UC 匿名直链本就走魔法 Referer;
+	// 夸克无主账号时只能匿名,作兜底。后端代理用此 Header(魔法 Referer)绕过 checkplay。
 	header := http.Header{
 		"User-Agent":      []string{d.conf.ua},
 		"Referer":         []string{downloadUrl + "\\ "},
