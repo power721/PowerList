@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -260,7 +259,7 @@ func (d *QuarkUCTV) getTranscodingLink(ctx context.Context, file model.Obj) (*mo
 		exp := time.Hour
 		log.Debugf("transcoding link url: %v", url)
 		return &model.Link{
-			URL:           url + fmt.Sprintf("#storageId=%d", d.ID),
+			URL:           url,
 			Expiration:    &exp,
 			ContentLength: size,
 			Concurrency:   d.Concurrency,
@@ -288,7 +287,7 @@ func (d *QuarkUCTV) getDownloadLink(ctx context.Context, file model.Obj) (*model
 
 	log.Debugf("download link: %v", fileLink)
 	return &model.Link{
-		URL:         fileLink.Data.DownloadURL + fmt.Sprintf("#storageId=%d", d.ID),
+		URL:         fileLink.Data.DownloadURL,
 		Concurrency: d.Concurrency,
 		PartSize:    d.ChunkSize * utils.KB,
 	}, nil

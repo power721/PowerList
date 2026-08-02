@@ -386,7 +386,7 @@ func (xc *XunLeiBrowserCommon) Link(ctx context.Context, file model.Obj, args mo
 	exp := 15 * time.Minute
 	link := &model.Link{
 		Expiration: &exp,
-		URL:        lFile.WebContentLink + fmt.Sprintf("#storageId=%d", xc.ID),
+		URL:        lFile.WebContentLink,
 		Header: http.Header{
 			"User-Agent": {xc.DownloadUserAgent},
 		},

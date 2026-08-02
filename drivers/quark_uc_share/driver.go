@@ -33,12 +33,17 @@ var quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](2 * time.Minute)
 var resolveQuarkUCShareLink = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	name := d.getDriverName()
 	count := op.GetDriverCount(name)
+	log.Infof("[route] 转存+speedup 路径: driver=%s 网盘账号数=%d file=%s", name, count, file.GetName())
+	if count == 0 {
+		return nil, fmt.Errorf("没有 %s 网盘账号可转存", name)
+	}
 	var lastErr error
 	for i := 0; i < count; i++ {
 		link, err := d.link(ctx, file, args)
-		if err == nil {
+		if err == nil && link != nil {
 			return link, nil
 		}
+		log.Warnf("[route] 第%d/%d 次转存取链失败: err=%v linkNil=%v", i+1, count, err, link == nil)
 		lastErr = err
 	}
 	return nil, lastErr

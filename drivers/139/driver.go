@@ -177,7 +177,7 @@ func (d *Yun139) Link(ctx context.Context, file model.Obj, args model.LinkArgs) 
 	}
 	exp := 15 * time.Minute
 	return &model.Link{
-		URL:         url + fmt.Sprintf("#storageId=%d", d.ID),
+		URL:         url,
 		Expiration:  &exp,
 		Concurrency: d.Concurrency,
 		PartSize:    d.ChunkSize,

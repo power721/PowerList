@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
+
 	_139 "github.com/OpenListTeam/OpenList/v4/drivers/139"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	log "github.com/sirupsen/logrus"
-	"time"
 )
 
 var _ driver.Driver = (*Yun139GroupLink)(nil)
@@ -84,9 +85,9 @@ func (d *Yun139GroupLink) myLink(ctx context.Context, f File) (*model.Link, erro
 
 	exp := 15 * time.Minute
 	return &model.Link{
-		URL:         url + fmt.Sprintf("#storageId=%d", yun139.ID),
+		URL:         url,
 		Expiration:  &exp,
-		Concurrency: yun139.Concurrency, 
-		PartSize:    yun139.ChunkSize,   
+		Concurrency: yun139.Concurrency,
+		PartSize:    yun139.ChunkSize,
 	}, nil
 }

@@ -664,6 +664,31 @@ func jstr(m map[string]interface{}, key string) string {
 }
 
 // socialRequest 发到 drive-social-api.quark.cn(聊天提速接口),走 PC 客户端身份。
+func truncStr(s string, n int) string {
+	if len(s) > n {
+		return s[:n] + "..."
+	}
+	return s
+}
+
+func short(s string) string {
+	if len(s) > 8 {
+		return s[:8] + "..."
+	}
+	return s
+}
+
+func urlHost(u string) string {
+	if i := strings.Index(u, "://"); i >= 0 {
+		rest := u[i+3:]
+		if j := strings.IndexByte(rest, '/'); j >= 0 {
+			return rest[:j]
+		}
+		return rest
+	}
+	return u
+}
+
 func (d *QuarkUCShare) socialRequest(cookie, pathname, body string) (map[string]interface{}, error) {
 	u := "https://drive-social-api.quark.cn/1/clouddrive" + pathname + "?pr=ucpro&fr=pc&sys=win32&ve=3.15.0"
 	req := base.RestyClient.R()
@@ -678,10 +703,14 @@ func (d *QuarkUCShare) socialRequest(cookie, pathname, body string) (map[string]
 	req.SetResult(&resp)
 	var e Resp
 	req.SetError(&e)
-	if _, err := req.Execute(http.MethodPost, u); err != nil {
+	res, err := req.Execute(http.MethodPost, u)
+	if err != nil {
+		log.Warnf("[speedup] %s 请求失败: %v", pathname, err)
 		return nil, err
 	}
+	log.Debugf("[speedup] %s http=%d body=%s", pathname, res.StatusCode(), truncStr(string(res.Body()), 400))
 	if e.Code != 0 {
+		log.Warnf("[speedup] %s 业务失败 code=%d msg=%s", pathname, e.Code, e.Message)
 		return nil, errors.New(e.Message)
 	}
 	return resp, nil
@@ -691,8 +720,14 @@ func (d *QuarkUCShare) socialRequest(cookie, pathname, body string) (map[string]
 func (d *QuarkUCShare) getSpeedupToken(cookie, savedFid, fileName string) (string, error) {
 	if v, ok := speedupCache.Load(savedFid); ok {
 		if e := v.(speedupEntry); e.token != "" && time.Now().UnixMilli() < e.expire-60000 {
+			log.Infof("[speedup] 命中缓存 token=%s fid=%s", short(e.token), savedFid)
 			return e.token, nil
 		}
+	}
+	log.Infof("[speedup] 开始取 token: fid=%s name=%s", savedFid, fileName)
+	if cookie == "" {
+		log.Warnf("[speedup] cookie 为空,无法走聊天会话提速(需登录态)")
+		return "", errors.New("speedup: empty cookie")
 	}
 	fname, _ := json.Marshal(fileName)
 	body1 := fmt.Sprintf(`{"conversations":[{"conversation_id":%q,"conversation_type":3,"file_list":[{"client_extra":{"device_model":"TVBOX","group_id":%q,"local_msg_id":%q},"content":%s,"fid":%q}],"merge_file":0}],"return_msg_as_list":1}`,
@@ -710,8 +745,10 @@ func (d *QuarkUCShare) getSpeedupToken(cookie, savedFid, fileName string) (strin
 		}
 	}
 	if storeMsgID == "" {
+		log.Warnf("[speedup] batch_send 未返回 store_msg_id,resp=%s", truncStr(fmt.Sprint(r1), 300))
 		return "", errors.New("speedup: empty store_msg_id")
 	}
+	log.Infof("[speedup] batch_send ok store_msg_id=%s", storeMsgID)
 	body2 := fmt.Sprintf(`{"conversation_id":%q,"conversation_type":3,"msg_id":%q}`, speedupConversation, storeMsgID)
 	r2, err := d.socialRequest(cookie, "/chat/conv/file/acquire_dl_token", body2)
 	if err != nil {
@@ -720,6 +757,7 @@ func (d *QuarkUCShare) getSpeedupToken(cookie, savedFid, fileName string) (strin
 	data := jmap(r2, "data")
 	token := jstr(data, "token")
 	if token == "" {
+		log.Warnf("[speedup] acquire_dl_token 未返回 token,resp=%s", truncStr(fmt.Sprint(r2), 300))
 		return "", errors.New("speedup: empty token")
 	}
 	var expire int64
@@ -732,29 +770,66 @@ func (d *QuarkUCShare) getSpeedupToken(cookie, savedFid, fileName string) (strin
 		expire = time.Now().Add(30 * time.Minute).UnixMilli()
 	}
 	speedupCache.Store(savedFid, speedupEntry{token: token, expire: expire})
+	log.Infof("[speedup] acquire_dl_token ok token=%s expire=%d", short(token), expire)
 	return token, nil
+}
+
+// speedupDownload 走 drive-pc(PC 客户端)端点取带 token 的提速直链。
+// 关键:必须用 drive-pc.quark.cn;quark_uc 默认的 drive.quark.cn 对带 speedup token 的请求
+// 会返回 "download file size limit",只有 PC 客户端端点接受 speedup token(my.jar 也走 drive-pc)。
+func (d *QuarkUCShare) speedupDownload(cookie, savedFid, token string) (string, error) {
+	u := "https://drive-pc.quark.cn/1/clouddrive/file/download?pr=ucpro&fr=pc"
+	req := base.RestyClient.R()
+	req.SetHeaders(map[string]string{
+		"Cookie":       cookie,
+		"User-Agent":   d.conf.ua,
+		"Referer":      d.conf.referer + "/",
+		"Content-Type": "application/json",
+	})
+	req.SetBody(base.Json{"fids": []string{savedFid}, "token": token})
+	var resp DownResp
+	req.SetResult(&resp)
+	var e Resp
+	req.SetError(&e)
+	res, err := req.Execute(http.MethodPost, u)
+	if err != nil {
+		return "", err
+	}
+	log.Debugf("[speedup] file/download(drive-pc) http=%d body=%s", res.StatusCode(), truncStr(string(res.Body()), 300))
+	if e.Code != 0 {
+		return "", errors.New(e.Message)
+	}
+	if len(resp.Data) == 0 || resp.Data[0].DownloadUrl == "" {
+		return "", errors.New("empty speedup download url")
+	}
+	return resp.Data[0].DownloadUrl, nil
 }
 
 // speedupLink 带提速 token 取直链;任何一步失败回退 binding.link 的普通直链。
 func (d *QuarkUCShare) speedupLink(ctx context.Context, rb requestBinding, savedFile model.Obj, args model.LinkArgs) (*model.Link, error) {
+	// dl-c 提速是非会员通道:非会员的普通直链(dl-pc)被限速 ~1MB/s,speedup 换 dl-c(~14MB/s);
+	// SVIP 的普通直链本就不限速,speedup 对其只回 dl-pc,故跳过省一次聊天会话消息(对齐 my.jar r(isSvip))。
+	if rb.requestDriver != nil && rb.requestDriver.VIP {
+		log.Infof("[speedup] SVIP 账号,普通直链不限速,跳过 speedup %s", savedFile.GetName())
+		return rb.link(ctx, savedFile, args)
+	}
 	savedFid := savedFile.GetID()
 	token, err := d.getSpeedupToken(rb.cookie, savedFid, savedFile.GetName())
 	if err != nil {
-		log.Warnf("speedup token 失败,回退普通直链: %v", err)
+		log.Warnf("[speedup] token 获取失败,回退普通直链: %v", err)
 		return rb.link(ctx, savedFile, args)
 	}
-	body := base.Json{"fids": []string{savedFid}, "token": token}
-	var resp DownResp
-	_, err = d.requestWithBinding(rb, "/file/download", http.MethodPost, func(req *resty.Request) {
-		req.SetContext(ctx).SetBody(body)
-	}, &resp)
-	if err != nil || len(resp.Data) == 0 || resp.Data[0].DownloadUrl == "" {
-		log.Warnf("speedup 直链失败,回退普通直链: %v", err)
+	downloadUrl, err := d.speedupDownload(rb.cookie, savedFid, token)
+	if err != nil {
+		log.Warnf("[speedup] 带 token 的 file/download 失败,回退普通直链: %v", err)
 		return rb.link(ctx, savedFile, args)
 	}
+	host := urlHost(downloadUrl)
+	// dl-c-* = 提速通道; dl-pc-* = 普通限速通道。
+	log.Infof("[speedup] 提速直链 host=%s (dl-c=加速/dl-pc=普通) fid=%s", host, savedFid)
 	uc := rb.requestDriver
 	return &model.Link{
-		URL: resp.Data[0].DownloadUrl + fmt.Sprintf("#storageId=%d", uc.ID),
+		URL: downloadUrl,
 		Header: http.Header{
 			"Cookie":     []string{rb.cookie},
 			"Referer":    []string{d.conf.referer},

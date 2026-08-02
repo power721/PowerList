@@ -213,7 +213,7 @@ func (d *GuangYaPan) Link(ctx context.Context, file model.Obj, args model.LinkAr
 	exp := 1 * time.Hour
 	return &model.Link{
 		Expiration: &exp,
-		URL:        u + fmt.Sprintf("#storageId=%d", d.ID),
+		URL:        u,
 		Header: http.Header{
 			"User-Agent": []string{"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"},
 			"referer":    []string{"https://www.guangyapan.com/"},

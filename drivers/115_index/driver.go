@@ -3,7 +3,6 @@ package _115_index
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -116,7 +115,7 @@ func (d *Pan115Index) link(ctx context.Context, file model.Obj, args model.LinkA
 	go delayDelete115(pan115, sha1)
 	exp := 4 * time.Hour
 	return &model.Link{
-		URL:         downloadInfo.URL.URL + fmt.Sprintf("#storageId=%d", pan115.ID),
+		URL:         downloadInfo.URL.URL,
 		Expiration:  &exp,
 		Concurrency: pan115.Concurrency,
 		PartSize:    pan115.ChunkSize * utils.KB,
