@@ -3,14 +3,14 @@ package _139_share
 import (
 	"context"
 	"errors"
-	"time"
-
+	"fmt"
 	_139 "github.com/OpenListTeam/OpenList/v4/drivers/139"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	log "github.com/sirupsen/logrus"
+	"time"
 )
 
 type Yun139Share struct {
@@ -77,7 +77,7 @@ func (d *Yun139Share) myLink(ctx context.Context, file model.Obj, args model.Lin
 	}
 	exp := 15 * time.Minute
 	return &model.Link{
-		URL:         url,
+		URL:         url + fmt.Sprintf("#storageId=%d", yun139.ID),
 		Expiration:  &exp,
 		Concurrency: yun139.Concurrency,
 		PartSize:    yun139.ChunkSize,

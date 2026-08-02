@@ -707,7 +707,7 @@ func (y *Cloud189PC) GetShareLink(shareId int, file model.Obj) (*model.Link, err
 		exp := time.Hour
 		link := &model.Link{
 			Expiration: &exp,
-			URL:        url,
+			URL:        url + fmt.Sprintf("#storageId=%d", y.ID),
 			Header: http.Header{
 				"User-Agent": []string{base.UserAgent},
 			},

@@ -3,10 +3,7 @@ package aliyundrive_share2_open
 import (
 	"context"
 	"errors"
-	"net/http"
-	"strings"
-	"time"
-
+	"fmt"
 	_115 "github.com/OpenListTeam/OpenList/v4/drivers/115"
 	"github.com/OpenListTeam/OpenList/v4/drivers/aliyundrive_open"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -17,6 +14,9 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/go-resty/resty/v2"
 	"github.com/power721/115driver/pkg/driver"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	log "github.com/sirupsen/logrus"
@@ -162,7 +162,7 @@ func (d *AliyundriveShare2Open) getOpenLink(ali *aliyundrive_open.AliyundriveOpe
 
 	exp := 895 * time.Second
 	return &model.Link{
-		URL:        url,
+		URL:        url + fmt.Sprintf("#storageId=%d", ali.ID),
 		Expiration: &exp,
 		Header: http.Header{
 			"Referer":    []string{"https://www.alipan.com/"},

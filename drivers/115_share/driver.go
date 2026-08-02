@@ -3,16 +3,16 @@ package _115_share
 import (
 	"context"
 	"errors"
-	"net/http"
-	"strings"
-	"time"
-
+	"fmt"
 	_115 "github.com/OpenListTeam/OpenList/v4/drivers/115"
 	_123rapid "github.com/OpenListTeam/OpenList/v4/drivers/123_rapid"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	log "github.com/sirupsen/logrus"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
@@ -167,7 +167,7 @@ func (d *Pan115Share) link(ctx context.Context, file model.Obj, args model.LinkA
 	header := http.Header{}
 	header.Set("User-Agent", conf.UA115Browser)
 	return &model.Link{
-		URL:         downloadInfo.URL.URL,
+		URL:         downloadInfo.URL.URL + fmt.Sprintf("#storageId=%d", pan115.ID),
 		Expiration:  &exp,
 		Header:      header,
 		Concurrency: pan115.Concurrency,

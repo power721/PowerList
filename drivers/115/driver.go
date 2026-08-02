@@ -2,6 +2,7 @@ package _115
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -92,7 +93,7 @@ func (d *Pan115) Link(ctx context.Context, file model.Obj, args model.LinkArgs) 
 	exp := 4 * time.Hour
 	link := &model.Link{
 		Expiration:  &exp,
-		URL:         downloadInfo.Url.Url,
+		URL:         downloadInfo.Url.Url + fmt.Sprintf("#storageId=%d", d.ID),
 		Header:      downloadInfo.Header,
 		Concurrency: d.Concurrency,
 		PartSize:    d.ChunkSize * utils.KB,
