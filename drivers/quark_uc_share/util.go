@@ -3,15 +3,19 @@ package quark_uc_share
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	_123rapid "github.com/OpenListTeam/OpenList/v4/drivers/123_rapid"
 	quark "github.com/OpenListTeam/OpenList/v4/drivers/quark_uc"
 	"github.com/OpenListTeam/OpenList/v4/drivers/quark_uc_tv"
+	"github.com/OpenListTeam/OpenList/v4/internal/cache"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
@@ -24,13 +28,65 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-var Cookie = ""
-var idx = 0
-var idx2 = 0
+// 包级共享状态:分享驱动可以有多个实例,Link/List 又被 HTTP 处理器并发调用,
+// 所以账号轮询下标用原子量、兜底 Cookie 用读写锁保护,避免数据竞争。
+var (
+	accountIdx   atomic.Int64 // 网盘账号轮询下标
+	tvAccountIdx atomic.Int64 // TV 账号轮询下标
 
+	cookieMu    sync.RWMutex
+	shareCookie string // 无账号驱动时的兜底 Cookie,随响应里的 __puus 滚动更新
+)
+
+func getShareCookie() string {
+	cookieMu.RLock()
+	defer cookieMu.RUnlock()
+	return shareCookie
+}
+
+func setShareCookie(value string) {
+	cookieMu.Lock()
+	defer cookieMu.Unlock()
+	shareCookie = value
+}
+
+// updateShareCookiePuus 把响应里刷新的 __puus 写回兜底 Cookie。
+func updateShareCookiePuus(value string) {
+	cookieMu.Lock()
+	defer cookieMu.Unlock()
+	shareCookie = cookie.SetStr(shareCookie, "__puus", value)
+}
+
+// shareFileID 是 fileToObj 拼出的 "{fid}-{share_fid_token}-{pdir_fid}"。
+// 旧代码直接 strings.Split(id, "-") 取 s[1]/s[2],遇到不带 token 的 ID 会 panic。
+type shareFileID struct {
+	FileID   string
+	FidToken string
+	ParentID string
+}
+
+func parseShareFileID(id string) (shareFileID, error) {
+	parts := strings.SplitN(id, "-", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return shareFileID{}, fmt.Errorf("invalid share file id: %q", id)
+	}
+	parsed := shareFileID{FileID: parts[0], FidToken: parts[1]}
+	if len(parts) == 3 {
+		parsed.ParentID = parts[2]
+	}
+	return parsed, nil
+}
+
+// shareRequestBinding 把「用哪个账号发请求 / 转存到哪 / 怎么取直链 / 怎么删临时文件」收敛到一个接口,
+// 网盘账号(quark_uc)和 TV 账号(quark_uc_tv)各实现一份,转存-取链-删除的主流程因此只保留一份实现。
 type shareRequestBinding interface {
 	doRequest(d *QuarkUCShare, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error)
 	tempDirID() string
+	accountID() uint
+	accountLabel(d *QuarkUCShare) string
+	getTempFile(ctx context.Context, dirID, fileID string) (model.Obj, error)
+	deleteTempFile(ctx context.Context, fileID string) error
+	link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error)
 }
 
 type requestBinding struct {
@@ -58,19 +114,70 @@ func (b requestBinding) tempDirID() string {
 	return b.tempDirId
 }
 
+func (b requestBinding) accountID() uint {
+	if b.requestDriver == nil {
+		return 0
+	}
+	return b.requestDriver.ID
+}
+
+func (b requestBinding) accountLabel(d *QuarkUCShare) string {
+	return d.getDriverName()
+}
+
+func (b requestBinding) getTempFile(_ context.Context, dirID, fileID string) (model.Obj, error) {
+	if b.requestDriver == nil {
+		return nil, errors.New("no netdisk account bound")
+	}
+	return b.requestDriver.GetTempFile(dirID, fileID)
+}
+
+func (b requestBinding) deleteTempFile(_ context.Context, fileID string) error {
+	if b.requestDriver == nil {
+		return errors.New("no netdisk account bound")
+	}
+	var resp PlayResp
+	res, err := b.requestDriver.Request("/file/delete", http.MethodPost, func(req *resty.Request) {
+		req.SetBody(base.Json{
+			"action_type":  1,
+			"exclude_fids": []string{},
+			"filelist":     []string{fileID},
+		})
+	}, &resp)
+	log.Debugf("delete temp file %v: %v", fileID, string(res))
+	if err != nil {
+		return err
+	}
+	if resp.Status != 200 {
+		return errors.New(resp.Message)
+	}
+	return nil
+}
+
+func (b requestBinding) link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	if b.requestDriver == nil {
+		return nil, errors.New("no netdisk account bound")
+	}
+	return b.requestDriver.Link(ctx, file, args)
+}
+
 func (b requestBinding) matches(uc *quark.QuarkOrUC) bool {
 	return b.requestDriver == uc
 }
 
 type requestTVBinding struct {
-	cookie    string
-	tempDirId string
+	requestDriver *quark_uc_tv.QuarkUCTV
+	cookie        string
+	tempDirId     string
+	// forceStream: 非 SVIP 账号强制走转码流(streaming),避免原画直链被限速。
+	forceStream bool
 }
 
 func bindTVRequestDriver(uc *quark_uc_tv.QuarkUCTV) requestTVBinding {
 	return requestTVBinding{
-		cookie:    uc.Cookie,
-		tempDirId: uc.TempDirId,
+		requestDriver: uc,
+		cookie:        uc.Cookie,
+		tempDirId:     uc.TempDirId,
 	}
 }
 
@@ -80,6 +187,68 @@ func (b requestTVBinding) doRequest(d *QuarkUCShare, pathname string, method str
 
 func (b requestTVBinding) tempDirID() string {
 	return b.tempDirId
+}
+
+func (b requestTVBinding) accountID() uint {
+	if b.requestDriver == nil {
+		return 0
+	}
+	return b.requestDriver.ID
+}
+
+func (b requestTVBinding) accountLabel(d *QuarkUCShare) string {
+	if d.config.Name == "UCShare" {
+		return "UCTV"
+	}
+	return "QuarkTV"
+}
+
+func (b requestTVBinding) getTempFile(ctx context.Context, dirID, fileID string) (model.Obj, error) {
+	if b.requestDriver == nil {
+		return nil, errors.New("no tv account bound")
+	}
+	return b.requestDriver.GetTempFile(ctx, dirID, fileID)
+}
+
+func (b requestTVBinding) deleteTempFile(ctx context.Context, fileID string) error {
+	if b.requestDriver == nil {
+		return errors.New("no tv account bound")
+	}
+	var resp PlayResp
+	res, err := b.requestDriver.Request(ctx, "/file/delete", http.MethodPost, func(req *resty.Request) {
+		req.SetBody(base.Json{
+			"action_type":  1,
+			"exclude_fids": []string{},
+			"filelist":     []string{fileID},
+		})
+	}, &resp)
+	log.Debugf("delete tv temp file %v: %v", fileID, string(res))
+	if err != nil {
+		return err
+	}
+	if resp.Status != 200 {
+		return errors.New(resp.Message)
+	}
+	return nil
+}
+
+func (b requestTVBinding) link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	if b.requestDriver == nil {
+		return nil, errors.New("no tv account bound")
+	}
+	uc := b.requestDriver
+	original := uc.Addition.VideoLinkMethod
+	if b.forceStream {
+		uc.Addition.VideoLinkMethod = "streaming"
+	}
+	link, err := uc.Link(ctx, file, args)
+	method := uc.Addition.VideoLinkMethod
+	uc.Addition.VideoLinkMethod = original
+	// 转码流交给客户端直连:代理会破坏 m3u8 相对地址。
+	if link != nil && method == "streaming" {
+		link.URL += "#proxy=0"
+	}
+	return link, err
 }
 
 func (b requestTVBinding) matches(other *requestTVBinding) bool {
@@ -126,13 +295,13 @@ var rapidQuarkUCTo123 = func(name, md5 string, size int64) *model.Link {
 
 func (d *QuarkUCShare) request(pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
 	name := d.getDriverName()
-	driver := op.GetFirstDriver(name, idx)
+	driver := op.GetFirstDriver(name, int(accountIdx.Load()))
 	if driver != nil {
 		uc := driver.(*quark.QuarkOrUC)
 		return uc.Request(pathname, method, callback, resp)
 	}
 
-	return d.directRequest(Cookie, pathname, method, callback, resp)
+	return d.directRequest(getShareCookie(), pathname, method, callback, resp)
 }
 
 func (d *QuarkUCShare) directRequest(cookieStr string, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
@@ -171,7 +340,7 @@ func (d *QuarkUCShare) directRequest(cookieStr string, pathname string, method s
 	__puus := cookie.GetCookie(res.Cookies(), "__puus")
 	if __puus != nil {
 		log.Debugf("__puus: %v", __puus)
-		Cookie = cookie.SetStr(Cookie, "__puus", __puus.Value)
+		updateShareCookiePuus(__puus.Value)
 	}
 	if e.Status >= 400 || e.Code != 0 {
 		return nil, errors.New(e.Message)
@@ -223,7 +392,6 @@ func (d *QuarkUCShare) getShareTokenWithBinding(binding shareRequestBinding) err
 		"passcode":           d.SharePwd,
 		"share_for_transfer": true,
 	}
-	var errRes Resp
 	var resp ShareTokenResp
 	res, err := d.requestWithBinding(binding, "/share/sharepage/token", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(data)
@@ -232,11 +400,17 @@ func (d *QuarkUCShare) getShareTokenWithBinding(binding shareRequestBinding) err
 	if err != nil {
 		return err
 	}
-	if errRes.Code != 0 {
-		return errors.New(errRes.Message)
+	if resp.Data.ShareToken == "" {
+		if resp.Message != "" {
+			return errors.New(resp.Message)
+		}
+		return errors.New("empty share token")
 	}
-	d.ShareToken = resp.Data.ShareToken
-	op.MustSaveDriverStorage(d)
+	// 只在 stoken 真的变了时落库,避免每次刷新都写一次 DB。
+	if d.ShareToken != resp.Data.ShareToken {
+		d.ShareToken = resp.Data.ShareToken
+		op.MustSaveDriverStorage(d)
+	}
 	log.Debugf("getShareToken: %v %v", d.ShareId, d.ShareToken)
 	return nil
 }
@@ -248,15 +422,63 @@ func (d *QuarkUCShare) requestWithBinding(binding shareRequestBinding, pathname 
 	return d.request(pathname, method, callback, resp)
 }
 
-func (d *QuarkUCShare) saveFile(binding shareRequestBinding, quark *quark.QuarkOrUC, id string) (model.Obj, error) {
-	s := strings.Split(id, "-")
-	fileId := s[0]
-	fileTokenId := s[1]
-	pid := s[2]
+// savedFileCache 缓存「分享内文件 → 已转存的临时文件对象」。
+// 临时文件在 DeleteDelayTime 秒后才会被删,期间重播同一集不必再转存一次
+// (省掉 save + task 轮询,约 0.5~12s,也少占一次网盘配额)。
+// 缓存的是 quark_uc/quark_uc_tv 的具体文件类型:它们的 Link() 内部有类型断言,不能用自造的 model.Object 替代。
+var savedFileCache = cache.NewKeyedCache[model.Obj](30 * time.Minute)
+
+// savedFileTTL 让缓存一定早于临时文件被删除时过期;删得太快(<=30s)则不缓存。
+func savedFileTTL() time.Duration {
+	delay := setting.GetInt(conf.DeleteDelayTime, 900)
+	if delay == 0 { // 0 = 不删除临时文件
+		return 30 * time.Minute
+	}
+	if delay <= 30 {
+		return 0
+	}
+	if ttl := time.Duration(delay-30) * time.Second; ttl < 30*time.Minute {
+		return ttl
+	}
+	return 30 * time.Minute
+}
+
+func savedFileKey(d *QuarkUCShare, binding shareRequestBinding, fileID string) string {
+	return fmt.Sprintf("%s:%d:%s:%s", d.getDriverName(), binding.accountID(), d.ShareId, fileID)
+}
+
+// saveShareFile 转存分享文件到账号临时目录,命中缓存时直接复用上次的转存结果。
+// 第二个返回值表示结果来自缓存,调用方取链失败时据此清缓存重试。
+func (d *QuarkUCShare) saveShareFile(ctx context.Context, binding shareRequestBinding, id string) (model.Obj, bool, error) {
+	parsed, err := parseShareFileID(id)
+	if err != nil {
+		return nil, false, err
+	}
+	key := savedFileKey(d, binding, parsed.FileID)
+	ttl := savedFileTTL()
+	if ttl > 0 {
+		if obj, ok := savedFileCache.Get(key); ok {
+			log.Debugf("[%v] 复用已转存文件 %v -> %v", binding.accountID(), parsed.FileID, obj.GetID())
+			savedFileCache.SetWithTTL(key, obj, ttl)
+			return obj, true, nil
+		}
+	}
+	obj, err := d.doSaveShareFile(ctx, binding, parsed)
+	if err != nil {
+		return nil, false, err
+	}
+	if ttl > 0 {
+		savedFileCache.SetWithTTL(key, obj, ttl)
+	}
+	return obj, false, nil
+}
+
+func (d *QuarkUCShare) doSaveShareFile(ctx context.Context, binding shareRequestBinding, parsed shareFileID) (model.Obj, error) {
+	fidToken := parsed.FidToken
 	for range 2 {
 		data := base.Json{
-			"fid_list":       []string{fileId},
-			"fid_token_list": []string{fileTokenId},
+			"fid_list":       []string{parsed.FileID},
+			"fid_token_list": []string{fidToken},
 			"exclude_fids":   []string{},
 			"to_pdir_fid":    binding.tempDirID(),
 			"pwd_id":         d.ShareId,
@@ -274,33 +496,31 @@ func (d *QuarkUCShare) saveFile(binding shareRequestBinding, quark *quark.QuarkO
 		}
 		var resp SaveResp
 		res, err := d.requestWithBinding(binding, "/share/sharepage/save", http.MethodPost, func(req *resty.Request) {
-			req.SetBody(data).SetQueryParams(query)
+			req.SetContext(ctx).SetBody(data).SetQueryParams(query)
 		}, &resp)
-		log.Debugf("saveFile: %v %+v response: %v, error: %v", id, data, string(res), err)
+		log.Debugf("saveFile: %v response: %v, error: %v", parsed.FileID, string(res), err)
 		if err != nil {
-			if strings.Contains(err.Error(), "token校验异常") {
-				fileTokenId, err = d.getFileToken(binding, pid, fileId)
+			// fid_token 过期:按父目录重新换一个 share_fid_token 再试一次。
+			if strings.Contains(err.Error(), "token校验异常") && parsed.ParentID != "" {
+				fidToken, err = d.getFileToken(binding, parsed.ParentID, parsed.FileID)
 				if err != nil {
 					return nil, err
 				}
 				continue
-			} else {
-				log.Warnf("save file failed: %v", err)
-				return nil, err
 			}
+			log.Warnf("save file failed: %v", err)
+			return nil, err
 		}
 		if resp.Status != 200 {
 			return nil, errors.New(resp.Message)
 		}
-		taskId := resp.Data.TaskId
-		log.Debugf("save file task id: %v", taskId)
-
-		newFileId, dirId, err := d.getSaveTaskResult(binding, taskId)
+		log.Debugf("save file task id: %v", resp.Data.TaskId)
+		newFileID, dirID, err := d.getSaveTaskResult(ctx, binding, resp.Data.TaskId)
 		if err != nil {
 			return nil, err
 		}
-		log.Debugf("new file id: %v dirId: %v", newFileId, dirId)
-		file, err := quark.GetTempFile(dirId, newFileId)
+		log.Debugf("new file id: %v dirId: %v", newFileID, dirID)
+		file, err := binding.getTempFile(ctx, dirID, newFileID)
 		if err != nil {
 			log.Warnf("get temp file failed: %v", err)
 			return nil, err
@@ -311,72 +531,18 @@ func (d *QuarkUCShare) saveFile(binding shareRequestBinding, quark *quark.QuarkO
 	return nil, errors.New("save file failed")
 }
 
-func (d *QuarkUCShare) saveTvFile(ctx context.Context, binding shareRequestBinding, quark *quark_uc_tv.QuarkUCTV, id string) (model.Obj, error) {
-	s := strings.Split(id, "-")
-	fileId := s[0]
-	fileTokenId := s[1]
-	pid := s[2]
-	for range 2 {
-		data := base.Json{
-			"fid_list":       []string{fileId},
-			"fid_token_list": []string{fileTokenId},
-			"exclude_fids":   []string{},
-			"to_pdir_fid":    binding.tempDirID(),
-			"pwd_id":         d.ShareId,
-			"stoken":         d.ShareToken,
-			"pdir_fid":       "0",
-			"pdir_save_all":  false,
-			"scene":          "link",
+func (d *QuarkUCShare) getSaveTaskResult(ctx context.Context, binding shareRequestBinding, taskId string) (string, string, error) {
+	const (
+		firstDelay = 200 * time.Millisecond
+		maxDelay   = time.Second
+		budget     = 12 * time.Second
+	)
+	deadline := time.Now().Add(budget)
+	delay := firstDelay
+	for retry := 1; ; retry++ {
+		if err := sleepCtx(ctx, delay); err != nil {
+			return "", "", err
 		}
-		query := map[string]string{
-			"pr":           d.conf.pr,
-			"fr":           "pc",
-			"uc_param_str": "",
-			"__dt":         strconv.Itoa(rand.Int()),
-			"__t":          strconv.FormatInt(time.Now().Unix(), 10),
-		}
-		var resp SaveResp
-		res, err := d.requestWithBinding(binding, "/share/sharepage/save", http.MethodPost, func(req *resty.Request) {
-			req.SetBody(data).SetQueryParams(query)
-		}, &resp)
-		log.Debugf("saveFile: %v %+v response: %v, error: %v", id, data, string(res), err)
-		if err != nil {
-			if strings.Contains(err.Error(), "token校验异常") {
-				fileTokenId, err = d.getFileToken(binding, pid, fileId)
-				if err != nil {
-					return nil, err
-				}
-				continue
-			} else {
-				log.Warnf("save file failed: %v", err)
-				return nil, err
-			}
-		}
-		if resp.Status != 200 {
-			return nil, errors.New(resp.Message)
-		}
-		taskId := resp.Data.TaskId
-		log.Debugf("save file task id: %v", taskId)
-
-		newFileId, dirId, err := d.getSaveTaskResult(binding, taskId)
-		if err != nil {
-			return nil, err
-		}
-		log.Debugf("new file id: %v dirId: %v", newFileId, dirId)
-		file, err := quark.GetTempFile(ctx, dirId, newFileId)
-		if err != nil {
-			log.Warnf("get temp file failed: %v", err)
-			return nil, err
-		}
-		log.Debugf("new file: %+v", file)
-		return file, nil
-	}
-	return nil, errors.New("save file failed")
-}
-
-func (d *QuarkUCShare) getSaveTaskResult(binding shareRequestBinding, taskId string) (string, string, error) {
-	time.Sleep(200 * time.Millisecond)
-	for retry := 1; retry <= 60; {
 		query := map[string]string{
 			"pr":           d.conf.pr,
 			"fr":           "pc",
@@ -388,7 +554,7 @@ func (d *QuarkUCShare) getSaveTaskResult(binding shareRequestBinding, taskId str
 		}
 		var resp SaveTaskResp
 		res, err := d.requestWithBinding(binding, "/task", http.MethodGet, func(req *resty.Request) {
-			req.SetQueryParams(query)
+			req.SetContext(ctx).SetQueryParams(query)
 		}, &resp)
 		log.Debugf("getSaveTaskResult: %v %v", taskId, string(res))
 		if err != nil {
@@ -401,90 +567,103 @@ func (d *QuarkUCShare) getSaveTaskResult(binding shareRequestBinding, taskId str
 		if len(resp.Data.SaveAs.Fid) > 0 {
 			return resp.Data.SaveAs.Fid[0], resp.Data.SaveAs.DirId, nil
 		}
-		time.Sleep(200 * time.Millisecond)
-		retry++
+		if time.Now().After(deadline) {
+			return "", "", errors.New("get task result timeout")
+		}
+		if delay < maxDelay {
+			delay += firstDelay
+		}
 	}
-	return "", "", errors.New("get task result timeout")
 }
 
-func (d *QuarkUCShare) getDownloadUrl(ctx context.Context, quark *quark.QuarkOrUC, file model.Obj, args model.LinkArgs) (*model.Link, error) {
-	go d.deleteDelay(quark, file.GetID())
-	return quark.Link(ctx, file, args)
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
-func (d *QuarkUCShare) getTvDownloadUrl(ctx context.Context, quark *quark_uc_tv.QuarkUCTV, file model.Obj, args model.LinkArgs) (*model.Link, error) {
-	go d.deleteDelayTv(ctx, quark, file.GetID())
-	return quark.Link(ctx, file, args)
+// saveAndLink 转存(或复用上次转存)后取直链。复用的临时文件已被删掉时清缓存重转存一次。
+func (d *QuarkUCShare) saveAndLink(ctx context.Context, binding shareRequestBinding, id string, args model.LinkArgs) (*model.Link, error) {
+	var lastErr error
+	for range 2 {
+		file, reused, err := d.saveShareFile(ctx, binding, id)
+		if err != nil {
+			return nil, err
+		}
+		key := ""
+		if parsed, perr := parseShareFileID(id); perr == nil {
+			key = savedFileKey(d, binding, parsed.FileID)
+		}
+		d.scheduleTempFileDelete(binding, file.GetID(), key)
+		link, err := binding.link(ctx, file, args)
+		if err == nil {
+			return link, nil
+		}
+		lastErr = err
+		if !reused {
+			return nil, err
+		}
+		log.Debugf("复用的临时文件取链失败,重新转存: %v", err)
+		if key != "" {
+			savedFileCache.Delete(key)
+		}
+	}
+	return nil, lastErr
 }
 
-func (d *QuarkUCShare) deleteDelay(quark *quark.QuarkOrUC, fileId string) {
-	delayTime := setting.GetInt(conf.DeleteDelayTime, 900)
-	if delayTime == 0 {
+type pendingDelete struct {
+	deadline atomic.Int64 // unix nano
+	cacheKey string
+}
+
+// pendingDeletes: "<账号ID>:<临时文件ID>" -> *pendingDelete
+var pendingDeletes sync.Map
+
+// scheduleTempFileDelete 延迟删除转存出来的临时文件。
+// 同一个临时文件只保留一个等待中的 goroutine,重复取链只把删除时间往后推:
+// 既避免长时间播放中途文件被删,也避免旧实现里「每次取链都 go 一个睡 900s 的 goroutine」的堆积。
+func (d *QuarkUCShare) scheduleTempFileDelete(binding shareRequestBinding, fileID, cacheKey string) {
+	delaySec := setting.GetInt(conf.DeleteDelayTime, 900)
+	if delaySec == 0 {
 		return
 	}
-	if delayTime < 5 {
-		delayTime = 5
+	if delaySec < 5 {
+		delaySec = 5
 	}
-
-	name := d.getDriverName()
-	log.Infof("[%v] Delete %s temp file %v after %v seconds.", quark.ID, name, fileId, delayTime)
-	time.Sleep(time.Duration(delayTime) * time.Second)
-	d.deleteFile(quark, fileId)
-}
-
-func (d *QuarkUCShare) deleteDelayTv(ctx context.Context, quark *quark_uc_tv.QuarkUCTV, fileId string) {
-	delayTime := setting.GetInt(conf.DeleteDelayTime, 900)
-	if delayTime == 0 {
+	deadline := time.Now().Add(time.Duration(delaySec) * time.Second).UnixNano()
+	key := fmt.Sprintf("%d:%s", binding.accountID(), fileID)
+	entry := &pendingDelete{cacheKey: cacheKey}
+	entry.deadline.Store(deadline)
+	if existing, loaded := pendingDeletes.LoadOrStore(key, entry); loaded {
+		existing.(*pendingDelete).deadline.Store(deadline)
 		return
 	}
-	if delayTime < 5 {
-		delayTime = 5
-	}
 
-	name := d.getDriverName()
-	log.Infof("[%v] Delete %s temp file %v after %v seconds.", quark.ID, name, fileId, delayTime)
-	time.Sleep(time.Duration(delayTime) * time.Second)
-	d.deleteFileTv(ctx, quark, fileId)
-}
-
-func (d *QuarkUCShare) deleteFile(quark *quark.QuarkOrUC, fileId string) {
-	name := d.getDriverName()
-	log.Infof("[%v] Delete %s temp file: %v", quark.ID, name, fileId)
-	data := base.Json{
-		"action_type":  1,
-		"exclude_fids": []string{},
-		"filelist":     []string{fileId},
-	}
-	var resp PlayResp
-	res, err := quark.Request("/file/delete", http.MethodPost, func(req *resty.Request) {
-		req.SetBody(data)
-	}, &resp)
-	log.Debugf("[%v] Delete %s temp file: %v %v", quark.ID, name, fileId, string(res))
-	if err != nil {
-		log.Warnf("[%v] Delete %s temp file failed: %v %v", quark.ID, name, fileId, err)
-	} else if resp.Status != 200 {
-		log.Warnf("[%v] Delete %s temp file failed: %v %v", quark.ID, name, fileId, resp.Message)
-	}
-}
-
-func (d *QuarkUCShare) deleteFileTv(ctx context.Context, quark *quark_uc_tv.QuarkUCTV, fileId string) {
-	name := d.getDriverName()
-	log.Infof("[%v] Delete %s temp file: %v", quark.ID, name, fileId)
-	data := base.Json{
-		"action_type":  1,
-		"exclude_fids": []string{},
-		"filelist":     []string{fileId},
-	}
-	var resp PlayResp
-	res, err := quark.Request(ctx, "/file/delete", http.MethodPost, func(req *resty.Request) {
-		req.SetBody(data)
-	}, &resp)
-	log.Debugf("[%v] Delete %s temp file: %v %v", quark.ID, name, fileId, string(res))
-	if err != nil {
-		log.Warnf("[%v] Delete %s temp file failed: %v %v", quark.ID, name, fileId, err)
-	} else if resp.Status != 200 {
-		log.Warnf("[%v] Delete %s temp file failed: %v %v", quark.ID, name, fileId, resp.Message)
-	}
+	label := binding.accountLabel(d)
+	log.Infof("[%v] Delete %s temp file %v after %v seconds.", binding.accountID(), label, fileID, delaySec)
+	go func() {
+		for {
+			wait := time.Until(time.Unix(0, entry.deadline.Load()))
+			if wait <= 0 {
+				break
+			}
+			time.Sleep(wait)
+		}
+		pendingDeletes.Delete(key)
+		if entry.cacheKey != "" {
+			savedFileCache.Delete(entry.cacheKey)
+		}
+		log.Infof("[%v] Delete %s temp file: %v", binding.accountID(), label, fileID)
+		// 用 Background:请求的 ctx 早就随响应结束被取消了。
+		if err := binding.deleteTempFile(context.Background(), fileID); err != nil {
+			log.Warnf("[%v] Delete %s temp file failed: %v %v", binding.accountID(), label, fileID, err)
+		}
+	}()
 }
 
 func (d *QuarkUCShare) getShareFiles(id string) ([]File, error) {
@@ -693,6 +872,8 @@ var resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link,
 					"Referer":    []string{d.conf.referer},
 					"Cookie":     []string{mk},
 				},
+				Concurrency: 16,
+				PartSize:    512 * utils.KB,
 			}, nil
 		}
 	}
@@ -707,7 +888,9 @@ var resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link,
 	// 客户端代理(alist-tvbox 等)直接用原始 URL 且自带 header,无法应用 link.Header。
 	// 追加片段标记 #x-referer=raw,供客户端解析后改用魔法 Referer;片段不会发往 CDN。
 	return &model.Link{
-		URL:    downloadUrl + "#x-referer=raw",
-		Header: header,
+		URL:         downloadUrl + "#x-referer=raw",
+		Header:      header,
+		Concurrency: 16,
+		PartSize:    512 * utils.KB,
 	}, nil
 }

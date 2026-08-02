@@ -2,7 +2,6 @@ package quark_uc_share
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -58,8 +57,8 @@ func (d *QuarkUCShare) Init(ctx context.Context) error {
 	if d.config.Name == "UCShare" {
 		key = conf.UC
 	}
-	if Cookie == "" {
-		Cookie = token.GetAccountToken(key)
+	if getShareCookie() == "" {
+		setShareCookie(token.GetAccountToken(key))
 	}
 
 	if conf.LazyLoad && !conf.StoragesLoaded {
@@ -128,72 +127,55 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 }
 
 func (d *QuarkUCShare) link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+	// TV 账号优先(开启开关时),失败再走网盘账号。
 	if setting.GetBool(conf.UssQuarkTv) {
-		link, err := d.getTvLink(ctx, file, args, false)
-		if link != nil {
+		if link, err := d.getTvLink(ctx, file, args, false); link != nil {
 			return link, err
 		}
 	}
 
 	name := d.getDriverName()
+	idx := int(accountIdx.Add(1))
 	storage := op.GetFirstDriver(name, idx)
-	idx++
 	if storage == nil {
-		return nil, errors.New(fmt.Sprintf("找不到%s网盘帐号", name))
+		return nil, fmt.Errorf("找不到%s网盘帐号", name)
 	}
 	uc := storage.(*quark.QuarkOrUC)
+	// 非 SVIP 账号原画直链易被限速,回落 TV 转码流(强制 streaming)。
 	if !uc.VIP {
-		link, err := d.getTvLink(ctx, file, args, true)
-		if link != nil {
+		if link, err := d.getTvLink(ctx, file, args, true); link != nil {
 			return link, err
 		}
 	}
 
-	Cookie = uc.Cookie
+	setShareCookie(uc.Cookie)
 	log.Infof("[%v] 获取%s文件直链 %v %v %v", uc.ID, name, file.GetName(), file.GetID(), file.GetSize())
-	binding := bindRequestDriver(uc)
-	newFile, err := d.saveFile(binding, uc, file.GetID())
-	if err != nil {
-		return nil, err
-	}
-
-	link, err := d.getDownloadUrl(ctx, uc, newFile, args)
-	return link, err
+	return d.saveAndLink(ctx, bindRequestDriver(uc), file.GetID(), args)
 }
 
 func (d *QuarkUCShare) getTvLink(ctx context.Context, file model.Obj, args model.LinkArgs, forceStream bool) (*model.Link, error) {
-	var tvName string
+	tvName := "QuarkTV"
 	if d.config.Name == "UCShare" {
 		tvName = "UCTV"
-	} else {
-		tvName = "QuarkTV"
 	}
-	storage := op.GetFirstDriver(tvName, idx2)
-	idx2++
-	if storage != nil {
-		uc := storage.(*quark_uc_tv.QuarkUCTV)
-		if uc.Cookie != "" {
-			Cookie = uc.Cookie
-			log.Infof("[%v] 获取%s文件直链 %v %v %v", uc.ID, tvName, file.GetName(), file.GetID(), file.GetSize())
-			binding := bindTVRequestDriver(uc)
-			newFile, err := d.saveTvFile(ctx, binding, uc, file.GetID())
-			if err != nil {
-				return nil, err
-			}
-
-			videoLinkMethod := uc.Addition.VideoLinkMethod
-			if forceStream {
-				uc.Addition.VideoLinkMethod = "streaming"
-			}
-			link, err := d.getTvDownloadUrl(ctx, uc, newFile, args)
-			uc.Addition.VideoLinkMethod = videoLinkMethod
-			if link != nil && uc.VideoLinkMethod == "streaming" {
-				link.URL = link.URL + "#proxy=0"
-			}
-			return link, err
-		}
+	idx := int(tvAccountIdx.Add(1))
+	storage := op.GetFirstDriver(tvName, idx)
+	if storage == nil {
+		return nil, nil
 	}
-	return nil, nil
+	uc := storage.(*quark_uc_tv.QuarkUCTV)
+	if uc.Cookie == "" {
+		return nil, nil
+	}
+	setShareCookie(uc.Cookie)
+	log.Infof("[%v] 获取%s文件直链 %v %v %v", uc.ID, tvName, file.GetName(), file.GetID(), file.GetSize())
+	binding := bindTVRequestDriver(uc)
+	binding.forceStream = forceStream
+	link, err := d.saveAndLink(ctx, binding, file.GetID(), args)
+	if err != nil {
+		return nil, err
+	}
+	return link, nil
 }
 
 var _ driver.Driver = (*QuarkUCShare)(nil)
