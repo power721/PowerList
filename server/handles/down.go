@@ -127,8 +127,27 @@ func proxy(c *gin.Context, link *model.Link, file model.Obj, proxyRange bool) {
 	}
 }
 
+// proxyDriverAliases 把分享驱动的 storage.Driver 名归一为它转存所用的网盘驱动名,
+// 这样全局 proxy_config(以网盘驱动名为键)同样覆盖分享驱动。
+// 未列出的驱动名按原值查询(查不到则保留驱动自身设定值)。
+var proxyDriverAliases = map[string]string{
+	"QuarkShare":       "Quark",
+	"UCShare":          "UC",
+	"115 Share":        "115 Cloud",
+	"123PanShare":      "123Pan",
+	"Yun139Share":      "139Yun",
+	"189Share":         "189CloudPC",
+	"BaiduShare2":      "BaiduNetdisk",
+	"GuangYaPanShare":  "GuangYaPan",
+	"AliyunShare":      "AliyundriveOpen",
+	"AliyundriveShare": "AliyundriveOpen",
+	"ThunderShare":     "ThunderBrowser",
+	"PikPakShare":      "PikPak",
+}
+
 // applyProxyConfig 用全局 proxy_config(JSON, 按 storage.Driver 键控)覆盖 link 的多线程参数。
 // 该配置由 alist-tvbox 的 local_proxy_config 推送而来;未配置的驱动保留驱动自身设定的值。
+// 分享驱动先经 proxyDriverAliases 归一为对应网盘驱动名,使全局配置对分享同样生效。
 func applyProxyConfig(driver string, link *model.Link) {
 	raw := setting.GetStr(conf.ProxyConfig)
 	if raw == "" || raw == "{}" {
@@ -141,6 +160,10 @@ func applyProxyConfig(driver string, link *model.Link) {
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		return
 	}
+	if alias, ok := proxyDriverAliases[driver]; ok {
+		driver = alias
+	}
+	log.Debugf("apply proxy config: %+v driver: %v", cfg, driver)
 	item, ok := cfg[driver]
 	if !ok {
 		return
@@ -151,6 +174,7 @@ func applyProxyConfig(driver string, link *model.Link) {
 	if item.ChunkSize > 0 {
 		link.PartSize = item.ChunkSize * utils.KB
 	}
+	log.Debugf("[proxy] link: %+v", link)
 }
 
 // TODO need optimize
