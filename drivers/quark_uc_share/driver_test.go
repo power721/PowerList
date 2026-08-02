@@ -270,9 +270,9 @@ func TestQuarkUCShareLink_PopulatesMultiSourceWhenEnabled(t *testing.T) {
 	if len(link.MultiSource) != 3 {
 		t.Fatalf("expected 3 MultiSource, got %d", len(link.MultiSource))
 	}
-	// Concurrency 4 放大 3 倍 = 12。
-	if link.Concurrency != 12 {
-		t.Fatalf("expected Concurrency=12 (4*3), got %d", link.Concurrency)
+	// Concurrency 不在 Link 放大(multiSourceRangeReader 内部按 N 放大且带上限),保持原值。
+	if link.Concurrency != 4 {
+		t.Fatalf("expected Concurrency unchanged=4, got %d", link.Concurrency)
 	}
 }
 

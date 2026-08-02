@@ -144,8 +144,12 @@ func newMultiSourceRangeReader(size int64, link *model.Link) model.RangeReaderIF
 	if perSourceConcurrency <= 0 {
 		perSourceConcurrency = net.DefaultDownloadConcurrency
 	}
-	// 总并发放大为 N * 单链并发。
+	// 总并发按源数放大,但加上限:单 IP 出口和 DNS 解析承受不了 N*perSource 的全开并发
+	// (如 5 源 × 32 = 160 并发会压垮 DNS,出现大量 lookup canceled)。
 	totalConcurrency := perSourceConcurrency * len(sources)
+	if totalConcurrency > 64 {
+		totalConcurrency = 64
+	}
 	if totalConcurrency < 1 {
 		totalConcurrency = 1
 	}
@@ -229,11 +233,16 @@ func newMultiSourceRangeReader(size int64, link *model.Link) model.RangeReaderIF
 						return
 					}
 					lastErr = err
-					log.Debugf("[multi-source] subChunk_%d src_%d failed: %v", idx, (startSrc+attempt)%nSrc, err)
+					// 客户端断开/seek 导致的取消是正常的(播放器频繁 Range 取消),不打日志避免刷屏。
+					if !errors.Is(err, context.Canceled) && ctx.Err() == nil {
+						log.Debugf("[multi-source] subChunk_%d src_%d failed: %v", idx, (startSrc+attempt)%nSrc, err)
+					}
 				}
 				slots[idx].err = lastErr
 				close(slots[idx].ready)
-				cancel(lastErr)
+				if lastErr != nil && !errors.Is(lastErr, context.Canceled) {
+					cancel(lastErr)
+				}
 			}()
 		}
 

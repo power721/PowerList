@@ -363,7 +363,6 @@ func (d *QuarkUCShare) requestAt(api, cookieStr, pathname string, method string,
 	}
 	var e Resp
 	req.SetError(&e)
-	log.Debugf("[share-pc] %s %s cookie=%q", method, u, cookieStr)
 	res, err := req.Execute(method, u)
 	if err != nil {
 		return nil, err
@@ -543,8 +542,8 @@ func (d *QuarkUCShare) doSaveShareFile(ctx context.Context, binding shareRequest
 		log.Debugf("saveFile: %v response: %v, error: %v", parsed.FileID, string(res), err)
 		if err != nil {
 			msg := err.Error()
-			log.Warnf("[save-debug] fid=%s fidToken=%s stoken=%q to_pdir=%s accountCookie=%q err=%s",
-				parsed.FileID, fidToken, d.ShareToken, binding.tempDirID(), binding.cookieValue(), msg)
+			log.Warnf("[save-debug] fid=%s fidToken=%s stoken=%q to_pdir=%s err=%s",
+				parsed.FileID, fidToken, d.ShareToken, binding.tempDirID(), msg)
 			// fid_token 过期:按父目录重新换一个 share_fid_token 再试一次。
 			if strings.Contains(msg, "token校验异常") && parsed.ParentID != "" {
 				fidToken, err = d.getFileToken(binding, parsed.ParentID, parsed.FileID)
@@ -645,10 +644,13 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 func (d *QuarkUCShare) saveAndLink(ctx context.Context, binding shareRequestBinding, id string, args model.LinkArgs) (*model.Link, error) {
 	var lastErr error
 	for range 2 {
+		saveStart := time.Now()
 		file, reused, err := d.saveShareFile(ctx, binding, id)
+		saveElapsed := time.Since(saveStart)
 		if err != nil {
 			return nil, err
 		}
+		log.Debugf("[saveAndLink] 账号 %d fid=%s 转存 耗时=%v reused=%v", binding.accountID(), file.GetID(), saveElapsed, reused)
 		key := ""
 		if parsed, perr := parseShareFileID(id); perr == nil {
 			key = savedFileKey(d, binding, parsed.FileID)
@@ -657,11 +659,13 @@ func (d *QuarkUCShare) saveAndLink(ctx context.Context, binding shareRequestBind
 		// 网盘转存的文件走 speedup token 提速直链(dl-c 提速通道,实测 8x);
 		// TV 账号或 speedup 失败时回退 binding.link 的普通直链。
 		var link *model.Link
+		linkStart := time.Now()
 		if rb, ok := binding.(requestBinding); ok {
 			link, err = d.speedupLink(ctx, rb, file, args)
 		} else {
 			link, err = binding.link(ctx, file, args)
 		}
+		log.Debugf("[saveAndLink] 账号 %d fid=%s 取链 耗时=%v", binding.accountID(), file.GetID(), time.Since(linkStart))
 		if err == nil {
 			return link, nil
 		}
@@ -1062,6 +1066,7 @@ func multiSourceMax() int {
 // 发到分片代理的直连去掉 #x-referer=raw 片段标记(那是给客户端代理用的,后端代理走 link.Header)。
 // 声明为 var 便于单测替换(避免单测里 op 还原账号)。
 var collectMultiSource = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs, primary *model.Link) []model.LinkSource {
+	collectStart := time.Now()
 	name := d.getDriverName()
 	storages := op.GetStorages(name)
 	if len(storages) < 2 {
@@ -1076,8 +1081,14 @@ var collectMultiSource = func(ctx context.Context, d *QuarkUCShare, file model.O
 		storages = storages[:n]
 	}
 
+	// 收集设硬上限,避免启播被慢账号的转存/speedup 拖垮;超时的账号放弃、只用已完成的。
+	collectCtx, cancel := context.WithTimeout(ctx, multiSourceCollectTimeout())
+	defer cancel()
+
 	type result struct {
-		l *model.Link
+		l         *model.Link
+		accountID uint
+		elapsed   time.Duration
 	}
 	results := make(chan result, len(storages))
 	var wg sync.WaitGroup
@@ -1089,18 +1100,21 @@ var collectMultiSource = func(ctx context.Context, d *QuarkUCShare, file model.O
 		wg.Add(1)
 		go func(uc *quark.QuarkOrUC) {
 			defer wg.Done()
-			if ctx.Err() != nil {
+			if collectCtx.Err() != nil {
 				return
 			}
+			acctStart := time.Now()
 			binding := bindRequestDriver(uc)
-			l, e := d.saveAndLink(ctx, binding, file.GetID(), args)
+			l, e := d.saveAndLink(collectCtx, binding, file.GetID(), args)
+			elapsed := time.Since(acctStart)
 			if e == nil && l != nil && l.URL != "" {
+				log.Infof("[multi-source] 账号 %d 取链完成 耗时=%v", uc.ID, elapsed)
 				select {
-				case results <- result{l: l}:
-				case <-ctx.Done():
+				case results <- result{l: l, accountID: uc.ID, elapsed: elapsed}:
+				case <-collectCtx.Done():
 				}
 			} else {
-				log.Warnf("[multi-source] 账号 %d 取链失败: %v", uc.ID, e)
+				log.Warnf("[multi-source] 账号 %d 取链失败 耗时=%v err=%v", uc.ID, elapsed, e)
 			}
 		}(uc)
 	}
@@ -1121,8 +1135,13 @@ var collectMultiSource = func(ctx context.Context, d *QuarkUCShare, file model.O
 		seen[s.URL] = true
 		srcs = append(srcs, s)
 	}
-	log.Infof("[multi-source] collect: driver=%s accounts=%d collected=%d", name, len(storages), len(srcs))
+	log.Infof("[multi-source] collect: driver=%s accounts=%d collected=%d 总耗时=%v", name, len(storages), len(srcs), time.Since(collectStart))
 	return srcs
+}
+
+// multiSourceCollectTimeout 多账号取链的总超时,避免启播卡死。默认 8s。
+func multiSourceCollectTimeout() time.Duration {
+	return 8 * time.Second
 }
 
 // sourceFromLink 从单账号取链结果构造 LinkSource:去掉 #x-referer=raw 片段标记,

@@ -163,7 +163,7 @@ func applyProxyConfig(driver string, link *model.Link) {
 	if alias, ok := proxyDriverAliases[driver]; ok {
 		driver = alias
 	}
-	log.Debugf("apply proxy config: %+v driver: %v", cfg, driver)
+	//log.Debugf("apply proxy config: %+v driver: %v", cfg, driver)
 	item, ok := cfg[driver]
 	if !ok {
 		return
@@ -174,7 +174,7 @@ func applyProxyConfig(driver string, link *model.Link) {
 	if item.ChunkSize > 0 {
 		link.PartSize = item.ChunkSize * utils.KB
 	}
-	log.Debugf("[proxy] link: %+v", link)
+	//log.Debugf("[proxy] link: %+v", link)
 }
 
 // TODO need optimize
