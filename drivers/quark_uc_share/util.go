@@ -1058,14 +1058,14 @@ func multiSourceMax() int {
 	return m
 }
 
-// collectMultiSource 对每个网盘账号各跑一遍转存+speedup 取链,收集成功的直连成 LinkSource 列表。
+// collectMultiAccountLinks 用 goroutine 对每个网盘账号并发 saveAndLink 取链。
 // 关键:必须用 op.GetStorages 遍历每个账号再各自 saveAndLink —— 不能用 d.link(),
 // 因为 d.link() 内部 GetFirstDriver 在 DriverRoundRobin 关闭时总返回 master 账号,
-// 并发调用只会取到同一条链、去重后只剩 1 个源。
-// 总数受 multiSourceMax() 限制(0=不限,默认 3)。任一账号失败跳过。
-// 发到分片代理的直连去掉 #x-referer=raw 片段标记(那是给客户端代理用的,后端代理走 link.Header)。
-// 声明为 var 便于单测替换(避免单测里 op 还原账号)。
-var collectMultiSource = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs, primary *model.Link) []model.LinkSource {
+// 并发调用只会取到同一条链。
+// 启播策略:所有账号同时跑,第一个成功后只额外等 firstSourceGrace(2s)收集更多源就返回,
+// 不等最慢的账号 —— 这样启播≈首源时间+2s,慢账号不拖垮启播。总数受 multiSourceMax() 限制。
+// 声明为 var 便于单测替换(避免单测里 op 未初始化)。
+var collectMultiAccountLinks = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) []*model.Link {
 	collectStart := time.Now()
 	name := d.getDriverName()
 	storages := op.GetStorages(name)
@@ -1081,16 +1081,10 @@ var collectMultiSource = func(ctx context.Context, d *QuarkUCShare, file model.O
 		storages = storages[:n]
 	}
 
-	// 收集设硬上限,避免启播被慢账号的转存/speedup 拖垮;超时的账号放弃、只用已完成的。
 	collectCtx, cancel := context.WithTimeout(ctx, multiSourceCollectTimeout())
 	defer cancel()
 
-	type result struct {
-		l         *model.Link
-		accountID uint
-		elapsed   time.Duration
-	}
-	results := make(chan result, len(storages))
+	results := make(chan *model.Link, len(storages))
 	var wg sync.WaitGroup
 	for _, st := range storages {
 		uc, ok := st.(*quark.QuarkOrUC)
@@ -1110,7 +1104,7 @@ var collectMultiSource = func(ctx context.Context, d *QuarkUCShare, file model.O
 			if e == nil && l != nil && l.URL != "" {
 				log.Infof("[multi-source] 账号 %d 取链完成 耗时=%v", uc.ID, elapsed)
 				select {
-				case results <- result{l: l, accountID: uc.ID, elapsed: elapsed}:
+				case results <- l:
 				case <-collectCtx.Done():
 				}
 			} else {
@@ -1120,28 +1114,42 @@ var collectMultiSource = func(ctx context.Context, d *QuarkUCShare, file model.O
 	}
 	go func() { wg.Wait(); close(results) }()
 
-	srcs := make([]model.LinkSource, 0, len(storages))
-	seen := map[string]bool{}
-	if primary != nil && primary.URL != "" {
-		s := sourceFromLink(primary, d)
-		seen[s.URL] = true
-		srcs = append(srcs, s)
-	}
-	for r := range results {
-		s := sourceFromLink(r.l, d)
-		if seen[s.URL] {
-			continue
+	// 首个成功后,额外等 firstSourceGrace 收集更多源;之后或全部完成或总超时,立即返回。
+	var links []*model.Link
+	afterFirst := time.NewTimer(multiSourceCollectTimeout()) // 占位,首源前不会触发
+	afterFirst.Stop()
+	firstDone := false
+	for {
+		select {
+		case l, ok := <-results:
+			if !ok {
+				log.Infof("[multi-source] collect: driver=%s accounts=%d collected=%d 总耗时=%v(全部结束)", name, len(storages), len(links), time.Since(collectStart))
+				return links
+			}
+			links = append(links, l)
+			if !firstDone {
+				firstDone = true
+				afterFirst.Reset(multiSourceFirstGrace())
+			}
+		case <-afterFirst.C:
+			log.Infof("[multi-source] collect: driver=%s accounts=%d collected=%d 总耗时=%v(首源+%v窗口)", name, len(storages), len(links), time.Since(collectStart), multiSourceFirstGrace())
+			cancel() // 停止仍在跑的慢账号
+			return links
+		case <-collectCtx.Done():
+			log.Infof("[multi-source] collect: driver=%s accounts=%d collected=%d 总耗时=%v(超时)", name, len(storages), len(links), time.Since(collectStart))
+			return links
 		}
-		seen[s.URL] = true
-		srcs = append(srcs, s)
 	}
-	log.Infof("[multi-source] collect: driver=%s accounts=%d collected=%d 总耗时=%v", name, len(storages), len(srcs), time.Since(collectStart))
-	return srcs
 }
 
 // multiSourceCollectTimeout 多账号取链的总超时,避免启播卡死。默认 8s。
 func multiSourceCollectTimeout() time.Duration {
 	return 8 * time.Second
+}
+
+// multiSourceFirstGrace 首个账号取链成功后,额外等待收集更多源的窗口。默认 2s。
+func multiSourceFirstGrace() time.Duration {
+	return 2 * time.Second
 }
 
 // sourceFromLink 从单账号取链结果构造 LinkSource:去掉 #x-referer=raw 片段标记,
@@ -1154,6 +1162,24 @@ func sourceFromLink(l *model.Link, d *QuarkUCShare) model.LinkSource {
 		u = u[:i]
 	}
 	return model.LinkSource{URL: u, Header: l.Header}
+}
+
+// sourcesFromLink 把多个账号取链结果转成去重的 LinkSource 列表(供 link.MultiSource)。
+func sourcesFromLinks(links []*model.Link, d *QuarkUCShare) []model.LinkSource {
+	srcs := make([]model.LinkSource, 0, len(links))
+	seen := map[string]bool{}
+	for _, l := range links {
+		if l == nil {
+			continue
+		}
+		s := sourceFromLink(l, d)
+		if seen[s.URL] {
+			continue
+		}
+		seen[s.URL] = true
+		srcs = append(srcs, s)
+	}
+	return srcs
 }
 
 // masterCookie 取当前驱动类型主账号(master)的 Cookie。
