@@ -116,6 +116,18 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 		log.Warnf("转存取链失败,回退免转存: %v", err)
 		link, err = resolveShareDirectLink(d, file)
 	}
+	// 多账号分片并行下载:开关开启、有≥2 个网盘账号且转存主链成功时,
+	// 对各账号各取一条直连填 link.MultiSource,总并发按账号数放大(N×Concurrency)。
+	// 任意一步失败都不影响主链,只是 MultiSource 留空 → 退回单链多线程。
+	if err == nil && link != nil && multiSourceEnabled(d) {
+		if ms := collectMultiSource(ctx, d, file, args, link); len(ms) > 1 {
+			link.MultiSource = ms
+			if link.Concurrency > 0 {
+				link.Concurrency *= len(ms)
+			}
+			log.Infof("[multi-source] %s %s 用 %d 账号分片下载 file=%s", d.config.Name, file.GetName(), len(ms), file.GetID())
+		}
+	}
 	if err == nil && link != nil {
 		quarkUCShareLinkCache.Set(key, link)
 	}

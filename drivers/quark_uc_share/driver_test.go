@@ -13,11 +13,28 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 )
 
+// stubMultiSourceDisabled 关闭多账号分片下载并还原,避免 Link() 读 setting 死锁(测试里 op 未初始化)。
+func stubMultiSourceDisabled(t *testing.T) {
+	t.Helper()
+	origMS := multiSourceEnabled
+	origCollect := collectMultiSource
+	multiSourceEnabled = func(d *QuarkUCShare) bool { return false }
+	collectMultiSource = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs, primary *model.Link) []model.LinkSource {
+		return nil
+	}
+	t.Cleanup(func() {
+		multiSourceEnabled = origMS
+		collectMultiSource = origCollect
+	})
+}
+
 func TestQuarkUCShareLink_CachesByFileID(t *testing.T) {
 	origCache := quarkUCShareLinkCache
 	origResolver := resolveQuarkUCShareLink
 	origDirect := resolveShareDirectLink
 	origSVIP := accountIsSVIP
+	origMS := multiSourceEnabled
+	origCollect := collectMultiSource
 	quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 	resolveCalls := 0
 	resolveQuarkUCShareLink = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -28,11 +45,17 @@ func TestQuarkUCShareLink_CachesByFileID(t *testing.T) {
 	resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link, error) {
 		return nil, errors.New("share-direct stub disabled") // 置失败,流程落到 resolveQuarkUCShareLink
 	}
+	multiSourceEnabled = func(d *QuarkUCShare) bool { return false }
+	collectMultiSource = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs, primary *model.Link) []model.LinkSource {
+		return nil
+	}
 	t.Cleanup(func() {
 		quarkUCShareLinkCache = origCache
 		resolveQuarkUCShareLink = origResolver
 		resolveShareDirectLink = origDirect
 		accountIsSVIP = origSVIP
+		multiSourceEnabled = origMS
+		collectMultiSource = origCollect
 	})
 
 	d := &QuarkUCShare{Addition: Addition{ShareToken: "share-token"}, config: driver.Config{Name: "QuarkShare"}}
@@ -69,6 +92,10 @@ func TestQuarkUCShareLink_DoesNotCacheErrors(t *testing.T) {
 	resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link, error) {
 		return nil, errors.New("share-direct stub disabled") // 失败 → 落到同样报错的 resolveQuarkUCShareLink
 	}
+	multiSourceEnabled = func(d *QuarkUCShare) bool { return false }
+	collectMultiSource = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs, primary *model.Link) []model.LinkSource {
+		return nil
+	}
 	t.Cleanup(func() {
 		quarkUCShareLinkCache = origCache
 		resolveQuarkUCShareLink = origResolver
@@ -87,6 +114,7 @@ func TestQuarkUCShareLink_DoesNotCacheErrors(t *testing.T) {
 }
 
 func TestQuarkUCShareLink_DifferentFileIDsDoNotShareCache(t *testing.T) {
+	stubMultiSourceDisabled(t)
 	origCache := quarkUCShareLinkCache
 	origResolver := resolveQuarkUCShareLink
 	origDirect := resolveShareDirectLink
@@ -119,6 +147,7 @@ func TestQuarkUCShareLink_DifferentFileIDsDoNotShareCache(t *testing.T) {
 
 func TestQuarkUCShareLink_FallbackToShareDirectOnSaveFail(t *testing.T) {
 	// 转存(save+speedup)为主;转存失败时回退免转存(share-direct)。
+	stubMultiSourceDisabled(t)
 	origCache := quarkUCShareLinkCache
 	origResolver := resolveQuarkUCShareLink
 	origDirect := resolveShareDirectLink
@@ -159,6 +188,7 @@ func TestQuarkUCShareLink_FallbackToShareDirectOnSaveFail(t *testing.T) {
 
 func TestQuarkUCShareLink_PrefersSaveAndSpeedup(t *testing.T) {
 	// 转存(save+speedup)为主:成功时不调用免转存(免转存无 speedup,被限速,仅兜底)。
+	stubMultiSourceDisabled(t)
 	origCache := quarkUCShareLinkCache
 	origResolver := resolveQuarkUCShareLink
 	origDirect := resolveShareDirectLink
@@ -194,6 +224,55 @@ func TestQuarkUCShareLink_PrefersSaveAndSpeedup(t *testing.T) {
 	}
 	if directCalls != 0 {
 		t.Fatalf("expected share-direct not called when save+speedup succeeds, got %d", directCalls)
+	}
+}
+
+// 开关开启、collectMultiSource 返回多源时,Link() 把 MultiSource 填上并把 Concurrency 放大 N 倍。
+func TestQuarkUCShareLink_PopulatesMultiSourceWhenEnabled(t *testing.T) {
+	stubMultiSourceDisabled(t)
+	origCache := quarkUCShareLinkCache
+	origResolver := resolveQuarkUCShareLink
+	origDirect := resolveShareDirectLink
+	quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
+	resolveQuarkUCShareLink = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+		// 主链:账号1 直链。
+		return &model.Link{URL: "https://cdn.example.com/account1/fid", Concurrency: 4, PartSize: 512 << 10}, nil
+	}
+	resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link, error) {
+		return nil, errors.New("share-direct stub disabled")
+	}
+	// 开启多账号分片:collectMultiSource 返回 3 个源。
+	multiSourceEnabled = func(d *QuarkUCShare) bool { return true }
+	collectMultiSource = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs, primary *model.Link) []model.LinkSource {
+		primarySrc := model.LinkSource{URL: "https://cdn.example.com/account1/fid"}
+		return []model.LinkSource{
+			primarySrc,
+			{URL: "https://cdn.example.com/account2/fid"},
+			{URL: "https://cdn.example.com/account3/fid"},
+		}
+	}
+	t.Cleanup(func() {
+		quarkUCShareLinkCache = origCache
+		resolveQuarkUCShareLink = origResolver
+		resolveShareDirectLink = origDirect
+	})
+
+	d := &QuarkUCShare{Addition: Addition{ShareToken: "share-token"}, config: driver.Config{Name: "QuarkShare"}}
+	file := &model.Object{ID: "fid-fidtoken-pid", Name: "big.mp4"}
+
+	link, err := d.Link(context.Background(), file, model.LinkArgs{})
+	if err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	if link == nil {
+		t.Fatal("nil link")
+	}
+	if len(link.MultiSource) != 3 {
+		t.Fatalf("expected 3 MultiSource, got %d", len(link.MultiSource))
+	}
+	// Concurrency 4 放大 3 倍 = 12。
+	if link.Concurrency != 12 {
+		t.Fatalf("expected Concurrency=12 (4*3), got %d", link.Concurrency)
 	}
 }
 
