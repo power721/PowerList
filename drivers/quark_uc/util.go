@@ -150,7 +150,7 @@ func (d *QuarkOrUC) getDownloadLink(file model.Obj) (*model.Link, error) {
 
 	exp := time.Hour
 	link := &model.Link{
-		URL:        resp.Data[0].DownloadUrl,
+		URL:        resp.Data[0].DownloadUrl + fmt.Sprintf("#storageId=%d", d.ID),
 		Expiration: &exp,
 		Header: http.Header{
 			"Cookie":     []string{d.Cookie},
@@ -195,7 +195,7 @@ func (d *QuarkOrUC) getTranscodingLink(file model.Obj) (*model.Link, error) {
 
 	if url != "" {
 		return &model.Link{
-			URL:           url,
+			URL:           url + fmt.Sprintf("#storageId=%d", d.ID),
 			ContentLength: size,
 			Concurrency:   d.Concurrency,
 			PartSize:      d.ChunkSize * utils.KB,

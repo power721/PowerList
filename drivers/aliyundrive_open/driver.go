@@ -3,11 +3,11 @@ package aliyundrive_open
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"net/http"
 	"path/filepath"
 	"time"
-
-	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
@@ -148,7 +148,7 @@ func (d *AliyundriveOpen) Link(ctx context.Context, file model.Obj, args model.L
 	}
 	exp := 895 * time.Second
 	return &model.Link{
-		URL:        url,
+		URL:        url + fmt.Sprintf("#storageId=%d", d.ID),
 		Expiration: &exp,
 		Header: http.Header{
 			"Referer":    []string{"https://www.alipan.com/"},

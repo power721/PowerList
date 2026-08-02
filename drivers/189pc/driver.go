@@ -3,13 +3,12 @@ package _189pc
 import (
 	"context"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	log "github.com/sirupsen/logrus"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
@@ -239,7 +238,7 @@ func (y *Cloud189PC) directLink(ctx context.Context, file model.Obj) (*model.Lin
 	exp := time.Hour
 	like := &model.Link{
 		Expiration: &exp,
-		URL:        downloadUrl.URL,
+		URL:        downloadUrl.URL + fmt.Sprintf("#storageId=%d", y.ID),
 		Header: http.Header{
 			"User-Agent": []string{base.UserAgent},
 		},
