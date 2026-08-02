@@ -101,24 +101,15 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 		return link, nil
 	}
 
-	// 按主账号类型选主路径,两条路互为兜底:
-	//   有 SVIP 主账号 → 转存(save+download 原画,全速,超大文件/ISO 可靠)为主,免转存兜底
-	//   否则(非 SVIP / 无账号) → 免转存(share-direct,原画、省空间省等待)为主,转存兜底
-	// 超大文件(如 ISO)免转存直链不稳,SVIP 走转存更可靠。
+	// 转存 + speedup token 为主(提速直链走 dl-c 通道,实测 ~14MB/s vs 免转存 ~1.7MB/s);
+	// speedup 必须先转存(聊天会话只认自己网盘的 fid),故转存是快速通道的前提。
+	// 免转存(share-direct)降为兜底:转存失败/无网盘账号时仍可播,但被限速。
 	var link *model.Link
 	var err error
-	if accountIsSVIP(d) {
-		link, err = resolveQuarkUCShareLink(ctx, d, file, args)
-		if err != nil || link == nil {
-			log.Warnf("SVIP 转存失败,回退免转存: %v", err)
-			link, err = resolveShareDirectLink(d, file)
-		}
-	} else {
+	link, err = resolveQuarkUCShareLink(ctx, d, file, args)
+	if err != nil || link == nil {
+		log.Warnf("转存取链失败,回退免转存: %v", err)
 		link, err = resolveShareDirectLink(d, file)
-		if err != nil || link == nil {
-			log.Warnf("免转存失败,回退转存: %v", err)
-			link, err = resolveQuarkUCShareLink(ctx, d, file, args)
-		}
 	}
 	if err == nil && link != nil {
 		quarkUCShareLinkCache.Set(key, link)

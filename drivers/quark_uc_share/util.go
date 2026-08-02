@@ -2,6 +2,8 @@ package quark_uc_share
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -286,7 +288,7 @@ var rapidQuarkUCTo123 = func(name, md5 string, size int64) *model.Link {
 		Size:     size,
 	})
 	if err != nil || link == nil {
-		log.Debugf("[quark-uc-share] rapid to 123 skipped: %v", err)
+		log.Infof("[quark-uc-share] rapid to 123 skipped: %v", err)
 		return nil
 	}
 	log.Infof("[quark-uc-share] 使用123秒传直链: %s", name)
@@ -600,7 +602,14 @@ func (d *QuarkUCShare) saveAndLink(ctx context.Context, binding shareRequestBind
 			key = savedFileKey(d, binding, parsed.FileID)
 		}
 		d.scheduleTempFileDelete(binding, file.GetID(), key)
-		link, err := binding.link(ctx, file, args)
+		// 网盘转存的文件走 speedup token 提速直链(dl-c 提速通道,实测 8x);
+		// TV 账号或 speedup 失败时回退 binding.link 的普通直链。
+		var link *model.Link
+		if rb, ok := binding.(requestBinding); ok {
+			link, err = d.speedupLink(ctx, rb, file, args)
+		} else {
+			link, err = binding.link(ctx, file, args)
+		}
 		if err == nil {
 			return link, nil
 		}
@@ -614,6 +623,146 @@ func (d *QuarkUCShare) saveAndLink(ctx context.Context, binding shareRequestBind
 		}
 	}
 	return nil, lastErr
+}
+
+// speedup token:把转存后的文件经「夸克聊天会话」换一个下载提速 token,
+// 再带进 file/download 拿 dl-c 提速通道直链(实测 ~14MB/s vs 普通 ~1.7MB/s)。
+// 链路: batch_send(文件名+转存fid) → store_msg_id → acquire_dl_token → data.token。
+const speedupConversation = "300000003429402383"
+
+type speedupEntry struct {
+	token  string
+	expire int64 // unix ms
+}
+
+var speedupCache sync.Map // savedFid -> speedupEntry
+
+func genUUID() string {
+	b := make([]byte, 16)
+	_, _ = crand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+func jmap(m map[string]interface{}, key string) map[string]interface{} {
+	if v, ok := m[key]; ok {
+		if mm, ok := v.(map[string]interface{}); ok {
+			return mm
+		}
+	}
+	return nil
+}
+
+func jstr(m map[string]interface{}, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// socialRequest 发到 drive-social-api.quark.cn(聊天提速接口),走 PC 客户端身份。
+func (d *QuarkUCShare) socialRequest(cookie, pathname, body string) (map[string]interface{}, error) {
+	u := "https://drive-social-api.quark.cn/1/clouddrive" + pathname + "?pr=ucpro&fr=pc&sys=win32&ve=3.15.0"
+	req := base.RestyClient.R()
+	req.SetHeaders(map[string]string{
+		"Cookie":       cookie,
+		"User-Agent":   d.conf.ua,
+		"Referer":      d.conf.referer + "/",
+		"Content-Type": "application/json; charset=utf-8",
+	})
+	req.SetBody(body)
+	var resp map[string]interface{}
+	req.SetResult(&resp)
+	var e Resp
+	req.SetError(&e)
+	if _, err := req.Execute(http.MethodPost, u); err != nil {
+		return nil, err
+	}
+	if e.Code != 0 {
+		return nil, errors.New(e.Message)
+	}
+	return resp, nil
+}
+
+// getSpeedupToken 取(并缓存)某个转存文件的下载提速 token。
+func (d *QuarkUCShare) getSpeedupToken(cookie, savedFid, fileName string) (string, error) {
+	if v, ok := speedupCache.Load(savedFid); ok {
+		if e := v.(speedupEntry); e.token != "" && time.Now().UnixMilli() < e.expire-60000 {
+			return e.token, nil
+		}
+	}
+	fname, _ := json.Marshal(fileName)
+	body1 := fmt.Sprintf(`{"conversations":[{"conversation_id":%q,"conversation_type":3,"file_list":[{"client_extra":{"device_model":"TVBOX","group_id":%q,"local_msg_id":%q},"content":%s,"fid":%q}],"merge_file":0}],"return_msg_as_list":1}`,
+		speedupConversation, genUUID(), genUUID(), string(fname), savedFid)
+	r1, err := d.socialRequest(cookie, "/chat/conv/msg/batch_send", body1)
+	if err != nil {
+		return "", err
+	}
+	storeMsgID := ""
+	if data := jmap(r1, "data"); data != nil {
+		if arr, ok := data["send_msg_list"].([]interface{}); ok && len(arr) > 0 {
+			if item, ok := arr[0].(map[string]interface{}); ok {
+				storeMsgID = jstr(item, "store_msg_id")
+			}
+		}
+	}
+	if storeMsgID == "" {
+		return "", errors.New("speedup: empty store_msg_id")
+	}
+	body2 := fmt.Sprintf(`{"conversation_id":%q,"conversation_type":3,"msg_id":%q}`, speedupConversation, storeMsgID)
+	r2, err := d.socialRequest(cookie, "/chat/conv/file/acquire_dl_token", body2)
+	if err != nil {
+		return "", err
+	}
+	data := jmap(r2, "data")
+	token := jstr(data, "token")
+	if token == "" {
+		return "", errors.New("speedup: empty token")
+	}
+	var expire int64
+	if data != nil {
+		if f, ok := data["expired_timestamp"].(float64); ok {
+			expire = int64(f)
+		}
+	}
+	if expire == 0 {
+		expire = time.Now().Add(30 * time.Minute).UnixMilli()
+	}
+	speedupCache.Store(savedFid, speedupEntry{token: token, expire: expire})
+	return token, nil
+}
+
+// speedupLink 带提速 token 取直链;任何一步失败回退 binding.link 的普通直链。
+func (d *QuarkUCShare) speedupLink(ctx context.Context, rb requestBinding, savedFile model.Obj, args model.LinkArgs) (*model.Link, error) {
+	savedFid := savedFile.GetID()
+	token, err := d.getSpeedupToken(rb.cookie, savedFid, savedFile.GetName())
+	if err != nil {
+		log.Warnf("speedup token 失败,回退普通直链: %v", err)
+		return rb.link(ctx, savedFile, args)
+	}
+	body := base.Json{"fids": []string{savedFid}, "token": token}
+	var resp DownResp
+	_, err = d.requestWithBinding(rb, "/file/download", http.MethodPost, func(req *resty.Request) {
+		req.SetContext(ctx).SetBody(body)
+	}, &resp)
+	if err != nil || len(resp.Data) == 0 || resp.Data[0].DownloadUrl == "" {
+		log.Warnf("speedup 直链失败,回退普通直链: %v", err)
+		return rb.link(ctx, savedFile, args)
+	}
+	uc := rb.requestDriver
+	return &model.Link{
+		URL: resp.Data[0].DownloadUrl + fmt.Sprintf("#storageId=%d", uc.ID),
+		Header: http.Header{
+			"Cookie":     []string{rb.cookie},
+			"Referer":    []string{d.conf.referer},
+			"User-Agent": []string{d.conf.ua},
+		},
+		Concurrency: uc.Concurrency,
+		PartSize:    uc.ChunkSize * utils.KB,
+	}, nil
 }
 
 type pendingDelete struct {

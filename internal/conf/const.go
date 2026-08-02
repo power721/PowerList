@@ -129,6 +129,7 @@ const (
 	OfflineDirName   = "alist-tvbox-offline"
 	DriverRoundRobin = "driver_round_robin"
 	UssQuarkTv       = "use_quark_tv"
+	ProxyConfig      = "proxy_config"
 
 	// SSO
 	SSOClientId          = "sso_client_id"

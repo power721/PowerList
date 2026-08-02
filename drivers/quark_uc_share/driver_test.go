@@ -117,20 +117,18 @@ func TestQuarkUCShareLink_DifferentFileIDsDoNotShareCache(t *testing.T) {
 	}
 }
 
-func TestQuarkUCShareLink_NonSVIPPrefersShareDirect(t *testing.T) {
-	// 非 SVIP:免转存为主,成功时不调用转存。
+func TestQuarkUCShareLink_FallbackToShareDirectOnSaveFail(t *testing.T) {
+	// 转存(save+speedup)为主;转存失败时回退免转存(share-direct)。
 	origCache := quarkUCShareLinkCache
 	origResolver := resolveQuarkUCShareLink
 	origDirect := resolveShareDirectLink
-	origSVIP := accountIsSVIP
 	quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 	resolveCalls := 0
 	directCalls := 0
 	resolveQuarkUCShareLink = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 		resolveCalls++
-		return nil, errors.New("resolve should not be called")
+		return nil, errors.New("save failed")
 	}
-	accountIsSVIP = func(d *QuarkUCShare) bool { return false }
 	resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link, error) {
 		directCalls++
 		return &model.Link{URL: "https://example.com/share-direct/" + file.GetID()}, nil
@@ -139,7 +137,6 @@ func TestQuarkUCShareLink_NonSVIPPrefersShareDirect(t *testing.T) {
 		quarkUCShareLinkCache = origCache
 		resolveQuarkUCShareLink = origResolver
 		resolveShareDirectLink = origDirect
-		accountIsSVIP = origSVIP
 	})
 
 	d := &QuarkUCShare{Addition: Addition{ShareToken: "share-token"}, config: driver.Config{Name: "QuarkShare"}}
@@ -152,20 +149,19 @@ func TestQuarkUCShareLink_NonSVIPPrefersShareDirect(t *testing.T) {
 	if link == nil || link.URL == "" {
 		t.Fatalf("expected non-empty link")
 	}
-	if directCalls != 1 {
-		t.Fatalf("expected share-direct once, got %d", directCalls)
+	if resolveCalls != 1 {
+		t.Fatalf("expected save attempted once, got %d", resolveCalls)
 	}
-	if resolveCalls != 0 {
-		t.Fatalf("expected resolve not called when share-direct succeeds, got %d", resolveCalls)
+	if directCalls != 1 {
+		t.Fatalf("expected share-direct fallback once, got %d", directCalls)
 	}
 }
 
-func TestQuarkUCShareLink_SVIPPrefersSaveAndDelete(t *testing.T) {
-	// SVIP 主账号:转存(save+download)为主,成功时不调用免转存(超大文件/ISO 更可靠)。
+func TestQuarkUCShareLink_PrefersSaveAndSpeedup(t *testing.T) {
+	// 转存(save+speedup)为主:成功时不调用免转存(免转存无 speedup,被限速,仅兜底)。
 	origCache := quarkUCShareLinkCache
 	origResolver := resolveQuarkUCShareLink
 	origDirect := resolveShareDirectLink
-	origSVIP := accountIsSVIP
 	quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 	resolveCalls := 0
 	directCalls := 0
@@ -173,7 +169,6 @@ func TestQuarkUCShareLink_SVIPPrefersSaveAndDelete(t *testing.T) {
 		resolveCalls++
 		return &model.Link{URL: "https://example.com/saved/" + file.GetID()}, nil
 	}
-	accountIsSVIP = func(d *QuarkUCShare) bool { return true } // SVIP:转存为主
 	resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link, error) {
 		directCalls++
 		return nil, errors.New("share-direct should not be called")
@@ -182,7 +177,6 @@ func TestQuarkUCShareLink_SVIPPrefersSaveAndDelete(t *testing.T) {
 		quarkUCShareLinkCache = origCache
 		resolveQuarkUCShareLink = origResolver
 		resolveShareDirectLink = origDirect
-		accountIsSVIP = origSVIP
 	})
 
 	d := &QuarkUCShare{Addition: Addition{ShareToken: "share-token"}, config: driver.Config{Name: "QuarkShare"}}
@@ -196,10 +190,10 @@ func TestQuarkUCShareLink_SVIPPrefersSaveAndDelete(t *testing.T) {
 		t.Fatalf("expected non-empty link")
 	}
 	if resolveCalls != 1 {
-		t.Fatalf("expected resolve (save+delete) once for SVIP, got %d", resolveCalls)
+		t.Fatalf("expected save+speedup once, got %d", resolveCalls)
 	}
 	if directCalls != 0 {
-		t.Fatalf("expected share-direct not called when SVIP save+delete succeeds, got %d", directCalls)
+		t.Fatalf("expected share-direct not called when save+speedup succeeds, got %d", directCalls)
 	}
 }
 
