@@ -106,9 +106,30 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 		return link, nil
 	}
 
-	// 转存 + speedup token 为主(提速直链走 dl-c 通道,实测 ~14MB/s vs 免转存 ~1.7MB/s);
-	// speedup 必须先转存(聊天会话只认自己网盘的 fid),故转存是快速通道的前提。
-	// 免转存(share-direct)降为兜底:转存失败/无网盘账号时仍可播,但被限速。
+	// 多账号分片并行下载(开关开):直接对所有网盘账号 goroutine 并发取链,
+	// 跳过串行的 resolveQuarkUCShareLink(它失败才换下一个账号,慢;且会让主链账号被重复取)。
+	// 首个账号成功后只额外等 2s 收集更多源,不等最慢账号,启播≈首源+2s。
+	if multiSourceEnabled(d) {
+		links := collectMultiAccountLinks(ctx, d, file, args)
+		if len(links) > 0 {
+			link := links[0]
+			if len(links) > 1 {
+				link.MultiSource = sourcesFromLinks(links, d)
+				log.Infof("[multi-source] %s %s 用 %d 账号分片下载 file=%s", d.config.Name, file.GetName(), len(link.MultiSource), file.GetID())
+			}
+			quarkUCShareLinkCache.Set(key, link)
+			return link, nil
+		}
+		// 全部账号取链失败,回退免转存兜底。
+		log.Warnf("[multi-source] 全部账号取链失败,回退免转存")
+		link, err := resolveShareDirectLink(d, file)
+		if err == nil && link != nil {
+			quarkUCShareLinkCache.Set(key, link)
+		}
+		return link, err
+	}
+
+	// 开关关:转存 + speedup 为主(串行轮询账号,失败换下一个),免转存兜底。
 	var link *model.Link
 	var err error
 	link, err = resolveQuarkUCShareLink(ctx, d, file, args)

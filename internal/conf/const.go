@@ -130,6 +130,10 @@ const (
 	DriverRoundRobin = "driver_round_robin"
 	UssQuarkTv       = "use_quark_tv"
 	ProxyConfig      = "proxy_config"
+	// QuarkMultiAccountProxy 开启夸克/UC 分享多账号分片并行下载(服务端 Go 代理):把同一资源转存到多个网盘账号,各取一条直连,分片按序号轮询分发以叠加带宽。默认关(PoC,需实测是否按账号限速)。
+	QuarkMultiAccountProxy = "quark_multi_account_proxy"
+	// QuarkMultiAccountMax 多账号分片下载同时使用的最大账号数,0=不限。默认 3。
+	QuarkMultiAccountMax = "quark_multi_account_max"
 
 	// SSO
 	SSOClientId          = "sso_client_id"

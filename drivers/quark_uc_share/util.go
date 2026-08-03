@@ -89,6 +89,8 @@ type shareRequestBinding interface {
 	getTempFile(ctx context.Context, dirID, fileID string) (model.Obj, error)
 	deleteTempFile(ctx context.Context, fileID string) error
 	link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error)
+	// cookieValue 返回该绑定账号的 Cookie,供走 drive-pc 端点的分享请求使用。
+	cookieValue() string
 }
 
 type requestBinding struct {
@@ -98,6 +100,7 @@ type requestBinding struct {
 }
 
 func bindRequestDriver(uc *quark.QuarkOrUC) requestBinding {
+	uc.EnsureTempDir() // 转存前确保临时目录 ID 已初始化(Init 时可能未成功)
 	return requestBinding{
 		requestDriver: uc,
 		cookie:        uc.Cookie,
@@ -165,6 +168,10 @@ func (b requestBinding) link(ctx context.Context, file model.Obj, args model.Lin
 
 func (b requestBinding) matches(uc *quark.QuarkOrUC) bool {
 	return b.requestDriver == uc
+}
+
+func (b requestBinding) cookieValue() string {
+	return b.cookie
 }
 
 type requestTVBinding struct {
@@ -257,6 +264,10 @@ func (b requestTVBinding) matches(other *requestTVBinding) bool {
 	return b.cookie == other.cookie && b.tempDirId == other.tempDirId
 }
 
+func (b requestTVBinding) cookieValue() string {
+	return b.cookie
+}
+
 func (d *QuarkUCShare) getDriverName() string {
 	name := "Quark"
 	if d.config.Name == "UCShare" {
@@ -307,7 +318,33 @@ func (d *QuarkUCShare) request(pathname string, method string, callback base.Req
 }
 
 func (d *QuarkUCShare) directRequest(cookieStr string, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
-	u := d.conf.api + pathname
+	return d.requestAt(d.conf.api, cookieStr, pathname, method, callback, resp)
+}
+
+// pcApi 返回夸克/UC 分享操作的 PC 客户端端点。夸克 sharepage/save、sharepage/token、
+// file/download 必须走 drive-pc.quark.cn:drive.quark.cn 的 token 接口宽松(能发 stoken),
+// 但 save/download 严格校验 stoken,会返回 "token [st invalid,code:50052]"。
+// 对齐不夜 cloud-drive.js quarkApiUrl=drive-pc.quark.cn。UC 的 conf.api 已是 pc-api.uc.cn。
+func (d *QuarkUCShare) pcApi() string {
+	if d.config.Name == "UCShare" {
+		return d.conf.api
+	}
+	return "https://drive-pc.quark.cn/1/clouddrive"
+}
+
+// requestSharePc 用 PC 端点 + binding(账号)Cookie(无 binding 用兜底 Cookie)发分享请求。
+func (d *QuarkUCShare) requestSharePc(binding shareRequestBinding, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
+	cookieStr := getShareCookie()
+	if binding != nil {
+		if c := binding.cookieValue(); c != "" {
+			cookieStr = c
+		}
+	}
+	return d.requestAt(d.pcApi(), cookieStr, pathname, method, callback, resp)
+}
+
+func (d *QuarkUCShare) requestAt(api, cookieStr, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
+	u := api + pathname
 	req := base.RestyClient.R()
 	req.SetHeaders(map[string]string{
 		"Cookie":     cookieStr,
@@ -395,7 +432,7 @@ func (d *QuarkUCShare) getShareTokenWithBinding(binding shareRequestBinding) err
 		"share_for_transfer": true,
 	}
 	var resp ShareTokenResp
-	res, err := d.requestWithBinding(binding, "/share/sharepage/token", http.MethodPost, func(req *resty.Request) {
+	res, err := d.requestSharePc(binding, "/share/sharepage/token", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(data)
 	}, &resp)
 	log.Debugf("getShareToken: %v %v", d.ShareId, string(res))
@@ -477,7 +514,9 @@ func (d *QuarkUCShare) saveShareFile(ctx context.Context, binding shareRequestBi
 
 func (d *QuarkUCShare) doSaveShareFile(ctx context.Context, binding shareRequestBinding, parsed shareFileID) (model.Obj, error) {
 	fidToken := parsed.FidToken
-	for range 2 {
+	stRefreshed := false
+	// 上限 3 次:fid_token 刷新 + stoken 刷新各占一次重试余量。
+	for attempt := 0; attempt < 3; attempt++ {
 		data := base.Json{
 			"fid_list":       []string{parsed.FileID},
 			"fid_token_list": []string{fidToken},
@@ -497,18 +536,30 @@ func (d *QuarkUCShare) doSaveShareFile(ctx context.Context, binding shareRequest
 			"__t":          strconv.FormatInt(time.Now().Unix(), 10),
 		}
 		var resp SaveResp
-		res, err := d.requestWithBinding(binding, "/share/sharepage/save", http.MethodPost, func(req *resty.Request) {
+		res, err := d.requestSharePc(binding, "/share/sharepage/save", http.MethodPost, func(req *resty.Request) {
 			req.SetContext(ctx).SetBody(data).SetQueryParams(query)
 		}, &resp)
 		log.Debugf("saveFile: %v response: %v, error: %v", parsed.FileID, string(res), err)
 		if err != nil {
+			msg := err.Error()
+			log.Warnf("[save-debug] fid=%s fidToken=%s stoken=%q to_pdir=%s err=%s",
+				parsed.FileID, fidToken, d.ShareToken, binding.tempDirID(), msg)
 			// fid_token 过期:按父目录重新换一个 share_fid_token 再试一次。
-			if strings.Contains(err.Error(), "token校验异常") && parsed.ParentID != "" {
+			if strings.Contains(msg, "token校验异常") && parsed.ParentID != "" {
 				fidToken, err = d.getFileToken(binding, parsed.ParentID, parsed.FileID)
 				if err != nil {
 					return nil, err
 				}
 				continue
+			}
+			// stoken 过期(code:50052 "st invalid"):刷新分享 stoken 后重试一次。
+			// stoken 是 share 级、账号无关,刷新后所有账号共享新 stoken。
+			if strings.Contains(msg, "st invalid") && !stRefreshed {
+				if e := d.getShareTokenWithBinding(binding); e == nil {
+					stRefreshed = true
+					log.Infof("[save] stoken 失效(50052),已刷新重试 %s", parsed.FileID)
+					continue
+				}
 			}
 			log.Warnf("save file failed: %v", err)
 			return nil, err
@@ -555,7 +606,7 @@ func (d *QuarkUCShare) getSaveTaskResult(ctx context.Context, binding shareReque
 			"__t":          strconv.FormatInt(time.Now().Unix(), 10),
 		}
 		var resp SaveTaskResp
-		res, err := d.requestWithBinding(binding, "/task", http.MethodGet, func(req *resty.Request) {
+		res, err := d.requestSharePc(binding, "/task", http.MethodGet, func(req *resty.Request) {
 			req.SetContext(ctx).SetQueryParams(query)
 		}, &resp)
 		log.Debugf("getSaveTaskResult: %v %v", taskId, string(res))
@@ -593,10 +644,13 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 func (d *QuarkUCShare) saveAndLink(ctx context.Context, binding shareRequestBinding, id string, args model.LinkArgs) (*model.Link, error) {
 	var lastErr error
 	for range 2 {
+		saveStart := time.Now()
 		file, reused, err := d.saveShareFile(ctx, binding, id)
+		saveElapsed := time.Since(saveStart)
 		if err != nil {
 			return nil, err
 		}
+		log.Debugf("[saveAndLink] 账号 %d fid=%s 转存 耗时=%v reused=%v", binding.accountID(), file.GetID(), saveElapsed, reused)
 		key := ""
 		if parsed, perr := parseShareFileID(id); perr == nil {
 			key = savedFileKey(d, binding, parsed.FileID)
@@ -605,11 +659,13 @@ func (d *QuarkUCShare) saveAndLink(ctx context.Context, binding shareRequestBind
 		// 网盘转存的文件走 speedup token 提速直链(dl-c 提速通道,实测 8x);
 		// TV 账号或 speedup 失败时回退 binding.link 的普通直链。
 		var link *model.Link
+		linkStart := time.Now()
 		if rb, ok := binding.(requestBinding); ok {
 			link, err = d.speedupLink(ctx, rb, file, args)
 		} else {
 			link, err = binding.link(ctx, file, args)
 		}
+		log.Debugf("[saveAndLink] 账号 %d fid=%s 取链 耗时=%v", binding.accountID(), file.GetID(), time.Since(linkStart))
 		if err == nil {
 			return link, nil
 		}
@@ -917,7 +973,7 @@ func (d *QuarkUCShare) getShareFilesWithBinding(binding shareRequestBinding, id 
 		}
 		log.Debugf("getShareFiles query: %v", query)
 		var resp ListResp
-		res, err := d.requestWithBinding(binding, "/share/sharepage/detail", http.MethodGet, func(req *resty.Request) {
+		res, err := d.requestSharePc(binding, "/share/sharepage/detail", http.MethodGet, func(req *resty.Request) {
 			req.SetQueryParams(query)
 		}, &resp)
 		name := d.getDriverName()
@@ -988,6 +1044,144 @@ var accountIsSVIP = func(d *QuarkUCShare) bool {
 	return ok && uc.VIP
 }
 
+// multiSourceEnabled 多账号分片并行下载总开关。声明为 var 便于单测替换。
+var multiSourceEnabled = func(d *QuarkUCShare) bool {
+	return setting.GetBool(conf.QuarkMultiAccountProxy)
+}
+
+// multiSourceMax 取同时使用的最大账号数,0=不限。默认 3。
+func multiSourceMax() int {
+	m := setting.GetInt(conf.QuarkMultiAccountMax, 3)
+	if m < 0 {
+		m = 0
+	}
+	return m
+}
+
+// collectMultiAccountLinks 用 goroutine 对每个网盘账号并发 saveAndLink 取链。
+// 关键:必须用 op.GetStorages 遍历每个账号再各自 saveAndLink —— 不能用 d.link(),
+// 因为 d.link() 内部 GetFirstDriver 在 DriverRoundRobin 关闭时总返回 master 账号,
+// 并发调用只会取到同一条链。
+// 启播策略:所有账号同时跑,第一个成功后只额外等 firstSourceGrace(2s)收集更多源就返回,
+// 不等最慢的账号 —— 这样启播≈首源时间+2s,慢账号不拖垮启播。总数受 multiSourceMax() 限制。
+// 声明为 var 便于单测替换(避免单测里 op 未初始化)。
+var collectMultiAccountLinks = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) []*model.Link {
+	collectStart := time.Now()
+	name := d.getDriverName()
+	storages := op.GetStorages(name)
+	if len(storages) < 2 {
+		return nil
+	}
+	max := multiSourceMax()
+	n := len(storages)
+	if max > 0 && n > max {
+		n = max
+	}
+	if n < len(storages) {
+		storages = storages[:n]
+	}
+
+	collectCtx, cancel := context.WithTimeout(ctx, multiSourceCollectTimeout())
+	defer cancel()
+
+	results := make(chan *model.Link, len(storages))
+	var wg sync.WaitGroup
+	for _, st := range storages {
+		uc, ok := st.(*quark.QuarkOrUC)
+		if !ok {
+			continue
+		}
+		wg.Add(1)
+		go func(uc *quark.QuarkOrUC) {
+			defer wg.Done()
+			if collectCtx.Err() != nil {
+				return
+			}
+			acctStart := time.Now()
+			binding := bindRequestDriver(uc)
+			l, e := d.saveAndLink(collectCtx, binding, file.GetID(), args)
+			elapsed := time.Since(acctStart)
+			if e == nil && l != nil && l.URL != "" {
+				log.Infof("[multi-source] 账号 %d 取链完成 耗时=%v", uc.ID, elapsed)
+				select {
+				case results <- l:
+				case <-collectCtx.Done():
+				}
+			} else {
+				log.Warnf("[multi-source] 账号 %d 取链失败 耗时=%v err=%v", uc.ID, elapsed, e)
+			}
+		}(uc)
+	}
+	go func() { wg.Wait(); close(results) }()
+
+	// 首个成功后,额外等 firstSourceGrace 收集更多源;之后或全部完成或总超时,立即返回。
+	var links []*model.Link
+	afterFirst := time.NewTimer(multiSourceCollectTimeout()) // 占位,首源前不会触发
+	afterFirst.Stop()
+	firstDone := false
+	for {
+		select {
+		case l, ok := <-results:
+			if !ok {
+				log.Infof("[multi-source] collect: driver=%s accounts=%d collected=%d 总耗时=%v(全部结束)", name, len(storages), len(links), time.Since(collectStart))
+				return links
+			}
+			links = append(links, l)
+			if !firstDone {
+				firstDone = true
+				afterFirst.Reset(multiSourceFirstGrace())
+			}
+		case <-afterFirst.C:
+			log.Infof("[multi-source] collect: driver=%s accounts=%d collected=%d 总耗时=%v(首源+%v窗口)", name, len(storages), len(links), time.Since(collectStart), multiSourceFirstGrace())
+			cancel() // 停止仍在跑的慢账号
+			return links
+		case <-collectCtx.Done():
+			log.Infof("[multi-source] collect: driver=%s accounts=%d collected=%d 总耗时=%v(超时)", name, len(storages), len(links), time.Since(collectStart))
+			return links
+		}
+	}
+}
+
+// multiSourceCollectTimeout 多账号取链的总超时,避免启播卡死。默认 8s。
+func multiSourceCollectTimeout() time.Duration {
+	return 8 * time.Second
+}
+
+// multiSourceFirstGrace 首个账号取链成功后,额外等待收集更多源的窗口。默认 2s。
+func multiSourceFirstGrace() time.Duration {
+	return 2 * time.Second
+}
+
+// sourceFromLink 从单账号取链结果构造 LinkSource:去掉 #x-referer=raw 片段标记,
+// 保留 URL + Header(后端代理直接用 link.Header,不走魔法 Referer 片段契约)。
+func sourceFromLink(l *model.Link, d *QuarkUCShare) model.LinkSource {
+	u := l.URL
+	// #x-referer=raw 是给客户端代理的片段标记(见 share-direct-referer-marker 契约),
+	// 后端代理直接用 link.Header,片段发往 CDN 也是无害但无意义,去掉更干净。
+	if i := strings.Index(u, "#"); i >= 0 {
+		u = u[:i]
+	}
+	return model.LinkSource{URL: u, Header: l.Header}
+}
+
+// sourcesFromLink 把多个账号取链结果转成去重的 LinkSource 列表(供 link.MultiSource)。
+func sourcesFromLinks(links []*model.Link, d *QuarkUCShare) []model.LinkSource {
+	srcs := make([]model.LinkSource, 0, len(links))
+	seen := map[string]bool{}
+	for _, l := range links {
+		if l == nil {
+			continue
+		}
+		s := sourceFromLink(l, d)
+		if seen[s.URL] {
+			continue
+		}
+		seen[s.URL] = true
+		srcs = append(srcs, s)
+	}
+	return srcs
+}
+
 // masterCookie 取当前驱动类型主账号(master)的 Cookie。
 // 夸克 share /file/download 需账号上下文(参考脚本 quarkRequestShareDownload 用 drive.fetch 带账号),
 // 匿名请求会失败 → 回退转存。故夸克取链需带主账号 Cookie;UC 匿名即可。无账号返回 ""。
@@ -1041,14 +1235,25 @@ var resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link,
 		"speedup_session": "",
 	}
 	var resp DownResp
-	_, err := d.directRequest(reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
+	_, err := d.requestAt(d.pcApi(), reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(body)
 	}, &resp)
 	// fid_token 失效时,按 pid 重新换取 share_fid_token 后重试一次(复用 saveFile 的回退策略)。
 	if err != nil && strings.Contains(err.Error(), "token校验异常") && pid != "" {
 		if newToken, e := d.getFileToken(nil, pid, fileId); e == nil && newToken != "" {
 			body["fids_token"] = []string{newToken}
-			_, err = d.directRequest(reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
+			_, err = d.requestAt(d.pcApi(), reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
+				req.SetBody(body)
+			}, &resp)
+		}
+	}
+	// stoken 失效(code:50052 "st invalid"):刷新分享 stoken 后重试一次。
+	// 夸克夜间 stoken 易过期,刷新一次可救回,避免免转存兜底整体失败。
+	if err != nil && strings.Contains(err.Error(), "st invalid") {
+		if e := d.getShareToken(); e == nil {
+			body["stoken"] = d.ShareToken
+			log.Infof("[share-direct] stoken 失效(50052),已刷新重试 %s", fileId)
+			_, err = d.requestAt(d.pcApi(), reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
 				req.SetBody(body)
 			}, &resp)
 		}
@@ -1060,7 +1265,7 @@ var resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link,
 			if newToken, e := d.getFileToken(nil, pid, fileId); e == nil && newToken != "" {
 				body["fids_token"] = []string{newToken}
 				body["stoken"] = d.ShareToken
-				_, err = d.directRequest(reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
+				_, err = d.requestAt(d.pcApi(), reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
 					req.SetBody(body)
 				}, &resp)
 			}
