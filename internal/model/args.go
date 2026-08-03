@@ -37,11 +37,11 @@ type Link struct {
 	PartSize      int   `json:"part_size"`
 	ContentLength int64 `json:"content_length"` // 转码视频、缩略图
 
-	// MultiSource 用于多账号分片并行下载。非空且长度>1 时，
-	// Proxy 把分片按 序号 % len(MultiSource) 轮询分发到各源直连
-	// (各账号 Cookie/Referer 独立),以叠加多账号带宽。
-	// 空或单元素时维持单链行为。纯 Go 内部用,不对外序列化。
-	MultiSource []LinkSource `json:"-"`
+	// MultiSource 用于多账号分片并行下载。非空且长度>1 时,
+	// 服务端 Proxy 把分片按 序号 % len(MultiSource) 轮询分发到各源直连;
+	// 客户端代理(/api/fs/get)也把它带给客户端(spider.jar 等),由客户端自行做多账号分片。
+	// 各源 URL+Header(账号 Cookie/Referer)独立。空或单元素时维持单链行为。
+	MultiSource []LinkSource `json:"multi_source,omitempty"`
 
 	utils.SyncClosers `json:"-"`
 	// 如果SyncClosers中的资源被关闭后Link将不可用，则此值应为 true
@@ -50,8 +50,8 @@ type Link struct {
 
 // LinkSource 是多账号分片下载的一条源直连(URL+Header 独立)。
 type LinkSource struct {
-	URL    string
-	Header http.Header
+	URL    string      `json:"url"`
+	Header http.Header `json:"header,omitempty"`
 }
 
 func (l *Link) Clone() *Link {

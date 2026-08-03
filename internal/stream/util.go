@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
@@ -195,6 +196,7 @@ func newMultiSourceRangeReader(size int64, link *model.Link) model.RangeReaderIF
 	}
 
 	rangeReader := func(ctx context.Context, httpRange http_range.Range) (io.ReadCloser, error) {
+		rangeStart := time.Now()
 		chunks := computeSubchunks(httpRange.Start, httpRange.Length)
 		if len(chunks) == 0 {
 			return io.NopCloser(bytes.NewReader(nil)), nil
@@ -262,9 +264,11 @@ func newMultiSourceRangeReader(size int64, link *model.Link) model.RangeReaderIF
 			ctx:    ctx,
 			slots:  slots,
 			cancel: cancel,
+			start:  rangeStart,
 		}
 		// reader.Close 应等 worker 退出并取消残余请求。
 		reader.wg = &wg
+		log.Debugf("[multi-source] RangeRead 启动 start=%d chunks=%d", httpRange.Start, len(chunks))
 		return reader, nil
 	}
 	return RangeReaderFunc(rangeReader)
@@ -285,6 +289,8 @@ type multiSourceReader struct {
 	off    int // 当前 subChunk 已读偏移
 	cancel context.CancelCauseFunc
 	wg     *sync.WaitGroup
+	start  time.Time // RangeRead 启动时刻,用于首字节耗时
+	logged bool      // 是否已打首字节日志
 }
 
 func (r *multiSourceReader) Read(p []byte) (int, error) {
@@ -318,6 +324,10 @@ func (r *multiSourceReader) Read(p []byte) (int, error) {
 		if r.off >= len(slot.buf) {
 			r.cur++
 			r.off = 0
+		}
+		if n > 0 && !r.logged {
+			r.logged = true
+			log.Debugf("[multi-source] 首字节 耗时=%v", time.Since(r.start))
 		}
 		return n, nil
 	}

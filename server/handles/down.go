@@ -46,6 +46,7 @@ func Down(c *gin.Context) {
 
 func Proxy(c *gin.Context) {
 	rawPath := c.Request.Context().Value(conf.PathKey).(string)
+	log.Debugf("[proxy] 收到代理请求 path=%s range=%s", rawPath, c.Request.Header.Get("Range"))
 	filename := stdpath.Base(rawPath)
 	storage, err := fs.GetStorage(rawPath, &fs.GetStoragesArgs{})
 	if err != nil {
