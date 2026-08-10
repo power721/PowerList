@@ -287,6 +287,18 @@ func rapidTo123Enabled(d *QuarkUCShare) bool {
 	return setting.GetBool(conf.QuarkTo123)
 }
 
+// shareDirectEnabled 按驱动类型(夸克/UC)选对应的「免转存(share-direct)」开关,默认开。
+// 关时 Link() 跳过 resolveShareDirectLink 兜底,只用转存/多账号取链。声明为 var 便于单测替换(测试里 op 未初始化,直接 setting.GetBool 会死锁)。
+var shareDirectEnabled = func(d *QuarkUCShare) bool {
+	if d == nil {
+		return true
+	}
+	if d.getDriverName() == "UC" {
+		return setting.GetBool(conf.UCShareDirect)
+	}
+	return setting.GetBool(conf.QuarkShareDirect)
+}
+
 // rapidQuarkUCTo123 按 MD5 把夸克/UC 文件秒传到 123。声明为 var 便于单测替换。
 var rapidQuarkUCTo123 = func(name, md5 string, size int64) *model.Link {
 	if len(md5) != utils.MD5.Width {

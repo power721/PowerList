@@ -17,13 +17,16 @@ func stubResolvers(direct func(d *BaiduShare2, file model.Obj) (*model.Link, err
 	origCache := baiduShareLinkCache
 	origDirect := resolveShareDirectLink
 	origTransfer := resolveBaiduShareLink
+	origEnabled := baiduShareDirectEnabled
 	baiduShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 	resolveShareDirectLink = direct
 	resolveBaiduShareLink = transfer
+	baiduShareDirectEnabled = func() bool { return true } // 现有用例测免转存路径,默认开
 	return func() {
 		baiduShareLinkCache = origCache
 		resolveShareDirectLink = origDirect
 		resolveBaiduShareLink = origTransfer
+		baiduShareDirectEnabled = origEnabled
 	}
 }
 
@@ -170,6 +173,39 @@ func TestBaiduShare2Link_ShareDirectFailFallsBackToTransfer(t *testing.T) {
 	}
 	if transferCalls != 1 {
 		t.Fatalf("免转存失败应回退转存一次, got %d", transferCalls)
+	}
+	if !strings.HasPrefix(link.URL, "https://transfer/") {
+		t.Fatalf("expected 转存 link, got %s", link.URL)
+	}
+}
+
+// 开关关 → 直接走转存,免转存路径不应被调用。
+func TestBaiduShare2Link_DirectDisabledSkipsDirect(t *testing.T) {
+	directCalls, transferCalls := 0, 0
+	restore := stubResolvers(
+		func(d *BaiduShare2, file model.Obj) (*model.Link, error) {
+			directCalls++
+			return &model.Link{URL: "https://d.pcs.baidu.com/dlna/" + file.GetID()}, nil
+		},
+		func(ctx context.Context, d *BaiduShare2, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+			transferCalls++
+			return &model.Link{URL: "https://transfer/" + file.GetID()}, nil
+		},
+	)
+	defer restore()                                        // stubResolvers 已捕获并还原 gate
+	baiduShareDirectEnabled = func() bool { return false } // 覆盖为关
+
+	d := &BaiduShare2{}
+	file := &model.Object{ID: "file-1", Name: "v.mp4"}
+	link, err := d.Link(context.Background(), file, model.LinkArgs{})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if directCalls != 0 {
+		t.Fatalf("开关关时不应调用免转存, got %d direct calls", directCalls)
+	}
+	if transferCalls != 1 {
+		t.Fatalf("应直接走转存一次, got %d transfer calls", transferCalls)
 	}
 	if !strings.HasPrefix(link.URL, "https://transfer/") {
 		t.Fatalf("expected 转存 link, got %s", link.URL)
