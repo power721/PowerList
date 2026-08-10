@@ -71,6 +71,7 @@ type DownResp struct {
 	Resp
 	Data []struct {
 		DownloadUrl string `json:"download_url"`
+		Md5         string `json:"md5"`
 	} `json:"data"`
 }
 

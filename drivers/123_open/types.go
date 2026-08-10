@@ -223,3 +223,14 @@ type OfflineDownloadProcessResp struct {
 		Status  int     `json:"status"`
 	} `json:"data"`
 }
+
+// ShareCreateResp /api/v1/share/create 返回
+type ShareCreateResp struct {
+	BaseResp
+	Data struct {
+		ShareKey string `json:"shareKey"`
+		// ShareID 接口返回数字,用 interface{} 兼容(本仓库未使用该字段)。
+		ShareID  interface{} `json:"shareID"`
+		SharePwd string      `json:"sharePwd"`
+	} `json:"data"`
+}

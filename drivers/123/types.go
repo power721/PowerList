@@ -21,6 +21,8 @@ type File struct {
 	Etag        string    `json:"Etag"`
 	S3KeyFlag   string    `json:"S3KeyFlag"`
 	DownloadUrl string    `json:"DownloadUrl"`
+	// ParentFileId 用于 DownloadUrl 过期后重新列一次父目录换新签名(见 unlimited.go)。
+	ParentFileId int64 `json:"ParentFileId"`
 }
 
 func (f File) CreateTime() time.Time {

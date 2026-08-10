@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync/atomic"
 	_139 "github.com/OpenListTeam/OpenList/v4/drivers/139"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	log "github.com/sirupsen/logrus"
+	"sync/atomic"
 	"time"
 )
 
@@ -86,7 +86,7 @@ func (d *Yun139GroupLink) myLink(ctx context.Context, f File) (*model.Link, erro
 	return &model.Link{
 		URL:         url + fmt.Sprintf("#storageId=%d", yun139.ID),
 		Expiration:  &exp,
-		Concurrency: yun139.Concurrency, 
-		PartSize:    yun139.ChunkSize,   
+		Concurrency: yun139.Concurrency,
+		PartSize:    yun139.ChunkSize,
 	}, nil
 }

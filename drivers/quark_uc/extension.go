@@ -52,6 +52,15 @@ func (d *QuarkOrUC) getTempFolder() {
 	d.createTempFolder()
 }
 
+// EnsureTempDir 确保转存用的临时目录 ID 已初始化。Init 只跑一次,若当时 GetFiles 失败
+// 会导致 TempDirId 为空(转存 to_pdir_fid 为空被夸克拒绝)。外部包转存前调用以兜底重试。
+func (d *QuarkOrUC) EnsureTempDir() {
+	if d.TempDirId == "" {
+		log.Infof("[%d] %s temp dir empty, re-init", d.ID, d.config.Name)
+		d.getTempFolder()
+	}
+}
+
 func (d *QuarkOrUC) createTempFolder() {
 	data := base.Json{
 		"dir_init_lock": false,

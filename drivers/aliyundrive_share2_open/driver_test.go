@@ -14,6 +14,7 @@ func TestAliyundriveShare2OpenLink_CachesByFileIDAndAliTo115State(t *testing.T) 
 	origCache := aliyundriveShareLinkCache
 	origResolver := resolveAliyundriveShareLink
 	origAliTo115 := aliyundriveShareAliTo115Enabled
+	origAliTo123 := aliyundriveShareAliTo123Enabled
 	aliyundriveShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 	resolveCalls := 0
 	resolveAliyundriveShareLink = func(ctx context.Context, d *AliyundriveShare2Open, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -24,11 +25,13 @@ func TestAliyundriveShare2OpenLink_CachesByFileIDAndAliTo115State(t *testing.T) 
 		aliyundriveShareLinkCache = origCache
 		resolveAliyundriveShareLink = origResolver
 		aliyundriveShareAliTo115Enabled = origAliTo115
+		aliyundriveShareAliTo123Enabled = origAliTo123
 	})
 
 	d := &AliyundriveShare2Open{}
 	file := &model.Object{ID: "file-1", Name: "video.mp4"}
 
+	aliyundriveShareAliTo123Enabled = func() bool { return false }
 	aliyundriveShareAliTo115Enabled = func() bool { return false }
 	first, err := d.Link(context.Background(), file, model.LinkArgs{})
 	if err != nil {
@@ -67,6 +70,7 @@ func TestAliyundriveShare2OpenLink_DoesNotCacheErrors(t *testing.T) {
 	origCache := aliyundriveShareLinkCache
 	origResolver := resolveAliyundriveShareLink
 	origAliTo115 := aliyundriveShareAliTo115Enabled
+	origAliTo123 := aliyundriveShareAliTo123Enabled
 	aliyundriveShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 	resolveCalls := 0
 	resolveAliyundriveShareLink = func(ctx context.Context, d *AliyundriveShare2Open, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -77,8 +81,10 @@ func TestAliyundriveShare2OpenLink_DoesNotCacheErrors(t *testing.T) {
 		aliyundriveShareLinkCache = origCache
 		resolveAliyundriveShareLink = origResolver
 		aliyundriveShareAliTo115Enabled = origAliTo115
+		aliyundriveShareAliTo123Enabled = origAliTo123
 	})
 
+	aliyundriveShareAliTo123Enabled = func() bool { return false }
 	aliyundriveShareAliTo115Enabled = func() bool { return false }
 	d := &AliyundriveShare2Open{}
 	file := &model.Object{ID: "file-1", Name: "video.mp4"}

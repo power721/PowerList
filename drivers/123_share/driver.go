@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/OpenListTeam/OpenList/v4/internal/conf"
-	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/op"
 
 	"golang.org/x/time/rate"
 
@@ -75,15 +76,29 @@ var resolveAnonLink = func(d *Pan123Share, f File, ip string) (*model.Link, erro
 }
 
 func (d *Pan123Share) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
-	// 匿名优先:公开分享可免登录换直链,无需 123Pan 账号。
 	if f, ok := file.(File); ok {
+		// 1) 无限直链:直接用 /share/get 列表里已签名的 DownloadUrl,剥掉缩略图变换标记。
+		//    免登录、不转存、不占分享方提取流量与浏览者额度(见 unlimited.go)。
+		if !d.DisableUnlimited {
+			if link, err := resolveThumbDirect(d, ctx, f, args.IP); err == nil {
+				return link, nil
+			} else {
+				log.Debugf("[123_share] 无限直链不可用,回退 download/info: %v", err)
+			}
+		}
+		// 2) 匿名 share/download/info:同样免登录,但会记到分享方的提取流量上。
 		if link, err := resolveAnonLink(d, f, args.IP); err == nil {
 			return link, nil
 		} else if errors.Is(err, err123TrafficLimit) {
-			// 分享方流量耗尽,账号重试也无意义,直接返回真实原因。
+			// 分享方流量耗尽:按 MD5(Etag)秒传到 123 Open 账号走个人下载(不走分享流量),
+			// 参考 drivers/123_rapid/rapid.go;失败则透传真实错误。
+			if link := rapidShareTo123(f); link != nil {
+				return link, nil
+			}
 			return nil, err
 		}
 	}
+	// 3) 最后才用配置的 123Pan 账号(鉴权 share/download/info)。
 	count := op.GetDriverCount("123Pan")
 	var lastErr error
 	for i := 0; i < count; i++ {

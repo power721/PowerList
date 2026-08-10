@@ -10,6 +10,7 @@ import (
 type Addition struct {
 	RefreshToken string `json:"refresh_token" required:"true"`
 	Cookie       string `json:"cookie" required:"true"`
+	AutoCheckin  bool   `json:"auto_checkin"`
 	driver.RootPath
 	OrderBy               string `json:"order_by" type:"select" options:"name,time,size" default:"name"`
 	OrderDirection        string `json:"order_direction" type:"select" options:"asc,desc" default:"asc"`

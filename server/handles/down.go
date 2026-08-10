@@ -1,6 +1,7 @@
 package handles
 
 import (
+	"encoding/json"
 	"errors"
 	stdpath "path"
 
@@ -45,6 +46,7 @@ func Down(c *gin.Context) {
 
 func Proxy(c *gin.Context) {
 	rawPath := c.Request.Context().Value(conf.PathKey).(string)
+	log.Debugf("[proxy] 收到代理请求 path=%s range=%s", rawPath, c.Request.Header.Get("Range"))
 	filename := stdpath.Base(rawPath)
 	storage, err := fs.GetStorage(rawPath, &fs.GetStoragesArgs{})
 	if err != nil {
@@ -66,6 +68,7 @@ func Proxy(c *gin.Context) {
 			common.ErrorPage(c, err, 500)
 			return
 		}
+		applyProxyConfig(storage.GetStorage().Driver, link)
 		proxy(c, link, file, storage.GetStorage().ProxyRange)
 	} else {
 		common.ErrorPage(c, errors.New("proxy not allowed"), 403)
@@ -123,6 +126,56 @@ func proxy(c *gin.Context, link *model.Link, file model.Obj, proxyRange bool) {
 			common.ErrorPage(c, err, 500, true)
 		}
 	}
+}
+
+// proxyDriverAliases 把分享驱动的 storage.Driver 名归一为它转存所用的网盘驱动名,
+// 这样全局 proxy_config(以网盘驱动名为键)同样覆盖分享驱动。
+// 未列出的驱动名按原值查询(查不到则保留驱动自身设定值)。
+var proxyDriverAliases = map[string]string{
+	"QuarkShare":       "Quark",
+	"UCShare":          "UC",
+	"115 Share":        "115 Cloud",
+	"123PanShare":      "123Pan",
+	"Yun139Share":      "139Yun",
+	"189Share":         "189CloudPC",
+	"BaiduShare2":      "BaiduNetdisk",
+	"GuangYaPanShare":  "GuangYaPan",
+	"AliyunShare":      "AliyundriveOpen",
+	"AliyundriveShare": "AliyundriveOpen",
+	"ThunderShare":     "ThunderBrowser",
+	"PikPakShare":      "PikPak",
+}
+
+// applyProxyConfig 用全局 proxy_config(JSON, 按 storage.Driver 键控)覆盖 link 的多线程参数。
+// 该配置由 alist-tvbox 的 local_proxy_config 推送而来;未配置的驱动保留驱动自身设定的值。
+// 分享驱动先经 proxyDriverAliases 归一为对应网盘驱动名,使全局配置对分享同样生效。
+func applyProxyConfig(driver string, link *model.Link) {
+	raw := setting.GetStr(conf.ProxyConfig)
+	if raw == "" || raw == "{}" {
+		return
+	}
+	var cfg map[string]struct {
+		Concurrency int `json:"concurrency"`
+		ChunkSize   int `json:"chunk_size"`
+	}
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return
+	}
+	if alias, ok := proxyDriverAliases[driver]; ok {
+		driver = alias
+	}
+	//log.Debugf("apply proxy config: %+v driver: %v", cfg, driver)
+	item, ok := cfg[driver]
+	if !ok {
+		return
+	}
+	if item.Concurrency > 0 {
+		link.Concurrency = item.Concurrency
+	}
+	if item.ChunkSize > 0 {
+		link.PartSize = item.ChunkSize * utils.KB
+	}
+	//log.Debugf("[proxy] link: %+v", link)
 }
 
 // TODO need optimize

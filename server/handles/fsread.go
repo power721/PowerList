@@ -261,6 +261,9 @@ type FsGetResp struct {
 	Header   string    `json:"header"`
 	Provider string    `json:"provider"`
 	Related  []ObjResp `json:"related"`
+	// MultiSource 多账号分片下载的各源直连(URL+Header 独立),供客户端代理(spider.jar 等)
+	// 自行做多账号分片;为空时客户端回落单链 raw_url。仅非 WebProxy 直链分支填充。
+	MultiSource []model.LinkSource `json:"multi_source,omitempty"`
 }
 
 func FsGetSplit(c *gin.Context) {
@@ -306,6 +309,7 @@ func FsGet(c *gin.Context, req *FsGetReq, user *model.User) {
 		return
 	}
 	var rawURL string
+	var multiSource []model.LinkSource
 
 	storage, err := fs.GetStorage(reqPath, &fs.GetStoragesArgs{})
 	provider, ok := model.GetProvider(obj)
@@ -346,6 +350,7 @@ func FsGet(c *gin.Context, req *FsGetReq, user *model.User) {
 				}
 				defer link.Close()
 				rawURL = link.URL
+				multiSource = link.MultiSource
 			}
 		}
 	}
@@ -372,11 +377,12 @@ func FsGet(c *gin.Context, req *FsGetReq, user *model.User) {
 			Thumb:        thumb,
 			MountDetails: mountDetails,
 		},
-		RawURL:   rawURL,
-		Readme:   getReadme(meta, reqPath),
-		Header:   getHeader(meta, reqPath),
-		Provider: provider,
-		Related:  toObjsResp(related, parentPath, isEncrypt(parentMeta, parentPath)),
+		RawURL:      rawURL,
+		Readme:      getReadme(meta, reqPath),
+		Header:      getHeader(meta, reqPath),
+		Provider:    provider,
+		Related:     toObjsResp(related, parentPath, isEncrypt(parentMeta, parentPath)),
+		MultiSource: multiSource,
 	})
 }
 

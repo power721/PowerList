@@ -24,8 +24,9 @@ type QuarkOrUC struct {
 	config driver.Config
 	conf   Conf
 
-	TempDirId string
-	VIP       bool
+	TempDirId        string
+	VIP              bool
+	checkinScheduler quarkCheckinScheduler
 }
 
 func (d *QuarkOrUC) Config() driver.Config {
@@ -37,6 +38,7 @@ func (d *QuarkOrUC) GetAddition() driver.Additional {
 }
 
 func (d *QuarkOrUC) Init(ctx context.Context) error {
+	d.stopCheckin()
 	_, err := d.request("/config", http.MethodGet, nil, nil)
 	if err == nil {
 		if d.AdditionVersion != 2 {
@@ -46,6 +48,7 @@ func (d *QuarkOrUC) Init(ctx context.Context) error {
 				d.WebdavPolicy = "native_proxy"
 			}
 		}
+		d.startCheckin()
 	}
 	d.getVipInfo()
 	d.getTempFolder()
@@ -53,6 +56,7 @@ func (d *QuarkOrUC) Init(ctx context.Context) error {
 }
 
 func (d *QuarkOrUC) Drop(ctx context.Context) error {
+	d.stopCheckin()
 	return nil
 }
 

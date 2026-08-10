@@ -16,10 +16,12 @@ import (
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/go-resty/resty/v2"
@@ -219,6 +221,22 @@ func (d *GuangYaPan) Link(ctx context.Context, file model.Obj, args model.LinkAr
 		Concurrency: d.Concurrency,
 		PartSize:    d.ChunkSize * utils.KB,
 	}, nil
+}
+
+// GetFileDetail 通过 /userres/v1/file/get_file_detail 读取文件 md5,用于跨盘秒传到 123。
+// md5 固定在 data.fileInfo.md5(大写 hex);取不到说明该文件无 md5,调用方静默回退光鸭直链。
+func (d *GuangYaPan) GetFileDetail(ctx context.Context, fileId string) (string, error) {
+	var resp fileDetailResp
+	if err := d.postAPI(ctx, "/userres/v1/file/get_file_detail", map[string]any{"fileId": fileId}, &resp); err != nil {
+		return "", err
+	}
+	for _, h := range []string{resp.Data.FileInfo.Md5, resp.Data.Md5} {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if len(h) == utils.MD5.Width {
+			return h, nil
+		}
+	}
+	return "", fmt.Errorf("file_detail 无可用 md5 (fileId=%s)", fileId)
 }
 
 func (d *GuangYaPan) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
@@ -563,6 +581,8 @@ func (d *GuangYaPan) refreshToken(ctx context.Context) error {
 		d.RefreshToken = strings.TrimSpace(out.RefreshToken)
 	}
 	op.MustSaveDriverStorage(d)
+	// 同步(可能轮换的)refresh_token 回 alist-tvbox,避免其重启后用旧 refresh_token。镜像 drivers/123_open/token.go。
+	token.SaveAccountToken(conf.GUANGYA, d.RefreshToken, int(d.ID))
 	return nil
 }
 

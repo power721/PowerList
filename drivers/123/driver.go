@@ -89,6 +89,15 @@ func (d *Pan123) List(ctx context.Context, dir model.Obj, args model.ListArgs) (
 
 func (d *Pan123) Link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	if f, ok := file.(File); ok {
+		// 优先用文件列表里已签名的直链(剥掉缩略图变换标记),省掉 download_info
+		// 与随后的 302 探测,签名有效期也长得多。见 unlimited.go。
+		if !d.DisableUnlimited {
+			if link, err := resolveThumbDirect(d, ctx, f, args.IP); err == nil {
+				return link, nil
+			} else {
+				log.Debugf("[123] 无限直链不可用,回退 download_info: %v", err)
+			}
+		}
 		//var resp DownResp
 		var headers map[string]string
 		if !utils.IsLocalIPAddr(args.IP) {
