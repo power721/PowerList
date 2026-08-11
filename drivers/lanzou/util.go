@@ -597,7 +597,7 @@ func (d *LanZou) getFolderByShareUrl(pwd string, sharePageData string) ([]FileOr
 				// Pwd: pwd, // 子文件夹不加密
 				ID:       folder[1],
 				NameAll:  folder[2],
-				IsFloder: true,
+				IsFolder: true,
 			})
 		}
 	}

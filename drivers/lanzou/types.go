@@ -83,8 +83,7 @@ func (f *FileOrFolder) GetSize() int64 {
 	}
 	return *f.size
 }
-func (f *FileOrFolder) GetDuration() int { return 0 }
-func (f *FileOrFolder) IsDir() bool      { return f.FolID != "" }
+func (f *FileOrFolder) IsDir() bool { return f.FolID != "" }
 func (f *FileOrFolder) ModTime() time.Time {
 	if f.time == nil {
 		time := MustParseTime(f.Time)
@@ -133,7 +132,7 @@ type FileOrFolderByShareUrl struct {
 	//T int `json:"t"`
 
 	// 文件夹特有
-	IsFloder bool `json:"-"`
+	IsFolder bool `json:"-"`
 
 	//
 	Url string `json:"-"`
@@ -163,8 +162,9 @@ func (f *FileOrFolderByShareUrl) GetSize() int64 {
 	}
 	return *f.size
 }
+func (f *FileOrFolder) GetDuration() int          { return 0 }
 func (f *FileOrFolderByShareUrl) GetDuration() int { return 0 }
-func (f *FileOrFolderByShareUrl) IsDir() bool      { return f.IsFloder }
+func (f *FileOrFolderByShareUrl) IsDir() bool { return f.IsFolder }
 func (f *FileOrFolderByShareUrl) ModTime() time.Time {
 	if f.time == nil {
 		time := MustParseTime(f.Time)
