@@ -18,13 +18,16 @@ func stubMultiSourceDisabled(t *testing.T) {
 	t.Helper()
 	origMS := multiSourceEnabled
 	origCollect := collectMultiAccountLinks
+	origSD := shareDirectEnabled
 	multiSourceEnabled = func(d *QuarkUCShare) bool { return false }
 	collectMultiAccountLinks = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) []*model.Link {
 		return nil
 	}
+	shareDirectEnabled = func(d *QuarkUCShare) bool { return true } // 现有用例测免转存兜底,默认开
 	t.Cleanup(func() {
 		multiSourceEnabled = origMS
 		collectMultiAccountLinks = origCollect
+		shareDirectEnabled = origSD
 	})
 }
 
@@ -82,6 +85,7 @@ func TestQuarkUCShareLink_DoesNotCacheErrors(t *testing.T) {
 	origResolver := resolveQuarkUCShareLink
 	origDirect := resolveShareDirectLink
 	origSVIP := accountIsSVIP
+	origSD := shareDirectEnabled
 	quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 	resolveCalls := 0
 	resolveQuarkUCShareLink = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -96,11 +100,13 @@ func TestQuarkUCShareLink_DoesNotCacheErrors(t *testing.T) {
 	collectMultiAccountLinks = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) []*model.Link {
 		return nil
 	}
+	shareDirectEnabled = func(d *QuarkUCShare) bool { return true } // resolve 失败会触及免转存闸,置开避免读 setting 死锁
 	t.Cleanup(func() {
 		quarkUCShareLinkCache = origCache
 		resolveQuarkUCShareLink = origResolver
 		resolveShareDirectLink = origDirect
 		accountIsSVIP = origSVIP
+		shareDirectEnabled = origSD
 	})
 
 	d := &QuarkUCShare{Addition: Addition{ShareToken: "share-token"}, config: driver.Config{Name: "QuarkShare"}}
@@ -183,6 +189,48 @@ func TestQuarkUCShareLink_FallbackToShareDirectOnSaveFail(t *testing.T) {
 	}
 	if directCalls != 1 {
 		t.Fatalf("expected share-direct fallback once, got %d", directCalls)
+	}
+}
+
+// 免转存开关关 → 转存失败时不应回退 share-direct,直接返回错误。
+func TestQuarkUCShareLink_ShareDirectDisabledSkipsDirect(t *testing.T) {
+	stubMultiSourceDisabled(t)
+	origSD := shareDirectEnabled
+	shareDirectEnabled = func(d *QuarkUCShare) bool { return false } // 关
+	t.Cleanup(func() { shareDirectEnabled = origSD })
+
+	origCache := quarkUCShareLinkCache
+	origResolver := resolveQuarkUCShareLink
+	origDirect := resolveShareDirectLink
+	quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
+	resolveCalls := 0
+	directCalls := 0
+	resolveQuarkUCShareLink = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+		resolveCalls++
+		return nil, errors.New("save failed")
+	}
+	resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link, error) {
+		directCalls++
+		return &model.Link{URL: "https://example.com/share-direct/" + file.GetID()}, nil
+	}
+	t.Cleanup(func() {
+		quarkUCShareLinkCache = origCache
+		resolveQuarkUCShareLink = origResolver
+		resolveShareDirectLink = origDirect
+	})
+
+	d := &QuarkUCShare{Addition: Addition{ShareToken: "share-token"}, config: driver.Config{Name: "QuarkShare"}}
+	file := &model.Object{ID: "fid-fidtoken-pid", Name: "video.mp4"}
+
+	link, err := d.Link(context.Background(), file, model.LinkArgs{})
+	if err == nil {
+		t.Fatalf("expected error when 转存 fails and 免转存 disabled, got link %v", link)
+	}
+	if resolveCalls != 1 {
+		t.Fatalf("expected save attempted once, got %d", resolveCalls)
+	}
+	if directCalls != 0 {
+		t.Fatalf("免转存关时不应调用 share-direct, got %d", directCalls)
 	}
 }
 

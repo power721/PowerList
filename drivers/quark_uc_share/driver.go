@@ -2,6 +2,7 @@ package quark_uc_share
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -120,7 +121,10 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 			quarkUCShareLinkCache.Set(key, link)
 			return link, nil
 		}
-		// 全部账号取链失败,回退免转存兜底。
+		// 全部账号取链失败,回退免转存兜底(免转存开关关时跳过)。
+		if !shareDirectEnabled(d) {
+			return nil, errors.New("[multi-source] 全部账号取链失败且免转存已关闭")
+		}
 		log.Warnf("[multi-source] 全部账号取链失败,回退免转存")
 		link, err := resolveShareDirectLink(d, file)
 		if err == nil && link != nil {
@@ -129,11 +133,11 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 		return link, err
 	}
 
-	// 开关关:转存 + speedup 为主(串行轮询账号,失败换下一个),免转存兜底。
+	// 开关关:转存 + speedup 为主(串行轮询账号,失败换下一个),免转存兜底(免转存开关开时)。
 	var link *model.Link
 	var err error
 	link, err = resolveQuarkUCShareLink(ctx, d, file, args)
-	if err != nil || link == nil {
+	if (err != nil || link == nil) && shareDirectEnabled(d) {
 		log.Warnf("转存取链失败,回退免转存: %v", err)
 		link, err = resolveShareDirectLink(d, file)
 	}

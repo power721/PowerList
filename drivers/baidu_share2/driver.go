@@ -28,6 +28,12 @@ import (
 var idx = 0
 var baiduShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 
+// baiduShareDirectEnabled 是否启用百度分享免转存(DLNA 签名直链为主、转存兜底)。默认关:关时直接走转存。
+// 声明为 var 便于单测替换(测试里 op 未初始化,直接 setting.GetBool 会死锁)。
+var baiduShareDirectEnabled = func() bool {
+	return setting.GetBool(conf.BaiduShareDirect)
+}
+
 var resolveBaiduShareLink = func(ctx context.Context, d *BaiduShare2, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	count := op.GetDriverCount("BaiduNetdisk")
 	var lastErr error
@@ -229,7 +235,20 @@ func (d *BaiduShare2) Link(ctx context.Context, file model.Obj, args model.LinkA
 		return link, nil
 	}
 
-	link, err := resolveBaiduShareLink(ctx, d, file, args)
+	// 免转存(原画(无限),DLNA 签名直链)为主、转存(save+delete)兜底,两条路互为补充。
+	// 免转存直链不限速、免 Cookie、省空间省等待;失败时回退转存,保证可用性。
+	// 开关默认关:关时跳过免转存,直接走转存(分支前行为)。
+	var link *model.Link
+	var err error
+	if baiduShareDirectEnabled() {
+		link, err = resolveShareDirectLink(d, file)
+	}
+	if err != nil || link == nil {
+		if err != nil {
+			log.Warnf("百度免转存失败,回退转存: %v", err)
+		}
+		link, err = resolveBaiduShareLink(ctx, d, file, args)
+	}
 	if err == nil && link != nil {
 		baiduShareLinkCache.Set(key, link)
 	}
