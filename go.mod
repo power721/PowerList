@@ -75,7 +75,6 @@ require (
 	github.com/tchap/go-patricia/v2 v2.3.3
 	github.com/u2takey/ffmpeg-go v0.5.0
 	github.com/upyun/go-sdk/v3 v3.0.4
-	github.com/winfsp/cgofuse v1.6.0
 	github.com/zzzhr1990/go-common-entity v0.0.0-20250202070650-1a200048f0d3
 	golang.org/x/crypto v0.51.0
 	golang.org/x/image v0.29.0
