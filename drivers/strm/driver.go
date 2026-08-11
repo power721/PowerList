@@ -114,7 +114,9 @@ func (d *Strm) Init(ctx context.Context) error {
 			}
 		}
 		d.DownloadFileTypes = strings.Join(downloadTypes, ",")
-		d.PathPrefix = "/d"
+		if d.PathPrefix == "" {
+			d.PathPrefix = "/d"
+		}
 		d.Version = 5
 	}
 	if len(d.SaveLocalMode) == 0 {
