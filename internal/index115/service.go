@@ -112,7 +112,7 @@ func (s *Service) listGroupMembers(ctx context.Context, gid int64) ([]FileItem, 
 	}
 	items := make([]FileItem, 0)
 	for _, share := range shares {
-		if share.GroupID != gid {
+		if share.GroupID != gid || !share.Visible {
 			continue
 		}
 		items = append(items, newShareDirItem(share))
@@ -123,7 +123,7 @@ func (s *Service) listGroupMembers(ctx context.Context, gid int64) ([]FileItem, 
 func looseShareItems(shares []ShareSummary) []FileItem {
 	var items []FileItem
 	for _, share := range shares {
-		if share.GroupID != 0 {
+		if share.GroupID != 0 || !share.Visible {
 			continue
 		}
 		items = append(items, newShareDirItem(share))

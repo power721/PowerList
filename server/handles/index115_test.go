@@ -165,3 +165,7 @@ func (s stubIndex115HTTPService) Search(ctx context.Context, req index115.Search
 func (s stubIndex115HTTPService) Link(ctx context.Context, req index115.LinkRequest) (index115.ResolvedLink, error) {
 	return s.link, s.err
 }
+
+func (s stubIndex115HTTPService) Detail(ctx context.Context, fileID string) (index115.FileItem, bool, error) {
+	return index115.FileItem{}, false, s.err
+}

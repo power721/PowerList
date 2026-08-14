@@ -9,7 +9,7 @@ import (
 func TestServiceBrowseRootReturnsShares(t *testing.T) {
 	svc := &Service{
 		store: stubStore{
-			shares: []ShareSummary{{ShareCode: "sw1", ShareTitle: "S1", ReceiveCode: "rc1"}},
+			shares: []ShareSummary{{ShareCode: "sw1", ShareTitle: "S1", ReceiveCode: "rc1", Visible: true}},
 		},
 	}
 
@@ -132,8 +132,8 @@ func TestServiceBrowseRootListsGroupsThenLooseShares(t *testing.T) {
 		store: stubStore{
 			groups: []GroupInfo{{ID: 1, Name: "欧美剧"}, {ID: 2, Name: "纪录片"}},
 			shares: []ShareSummary{
-				{ShareCode: "swG", ShareTitle: "Grouped", GroupID: 1},
-				{ShareCode: "swL", ShareTitle: "Loose", GroupID: 0},
+				{ShareCode: "swG", ShareTitle: "Grouped", GroupID: 1, Visible: true},
+				{ShareCode: "swL", ShareTitle: "Loose", GroupID: 0, Visible: true},
 			},
 		},
 	}
@@ -160,9 +160,9 @@ func TestServiceBrowseGroupSentinelListsMembersOnly(t *testing.T) {
 	svc := &Service{
 		store: stubStore{
 			shares: []ShareSummary{
-				{ShareCode: "swG1", ShareTitle: "M1", GroupID: 1},
-				{ShareCode: "swG2", ShareTitle: "M2", GroupID: 1},
-				{ShareCode: "swO", ShareTitle: "Other", GroupID: 2},
+				{ShareCode: "swG1", ShareTitle: "M1", GroupID: 1, Visible: true},
+				{ShareCode: "swG2", ShareTitle: "M2", GroupID: 1, Visible: true},
+				{ShareCode: "swO", ShareTitle: "Other", GroupID: 2, Visible: true},
 			},
 		},
 	}

@@ -254,5 +254,6 @@ func (d *Cloud189) GetDetails(ctx context.Context) (*model.StorageDetails, error
 	}, nil
 }
 
+
 var _ driver.Driver = (*Cloud189)(nil)
 var _ driver.PutResult = (*Cloud189)(nil)

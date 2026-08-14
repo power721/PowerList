@@ -516,7 +516,6 @@ func SetThunderBrowser(c *gin.Context) {
 	}
 	common.SuccessResp(c, "ok")
 }
-
 func OfflineDownloadTools(c *gin.Context) {
 	tools := tool.Tools.Names()
 	common.SuccessResp(c, tools)
