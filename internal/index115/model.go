@@ -10,6 +10,9 @@ type ShareSummary struct {
 	FileCount   int64
 	DirCount    int64
 	UpdatedAt   int64
+	// Visible: search-only (bulk) shares are excluded from homepage/group
+	// listings; search and direct browse keep working for them.
+	Visible bool
 }
 
 // GroupInfo is one virtual directory rendered on the homepage. ID maps to the

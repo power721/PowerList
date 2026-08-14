@@ -17,6 +17,9 @@ type shareMeta struct {
 	Status        string
 	LastCrawledAt int64
 	ID            int64
+	// Visible: search-only (bulk) shares have visible=0 and are excluded from
+	// homepage/group listings but stay reachable via search and direct browse.
+	Visible bool
 }
 
 type Store struct {
@@ -43,9 +46,21 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) RefreshShares(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, share_code, COALESCE(receive_code, ''), COALESCE(share_title, ''), status, COALESCE(last_crawled_at, 0), COALESCE(group_id, 0)
-		FROM share`)
+	// The visible column ships with bulk-share (search-only) indexes. Older
+	// indexes lack it; treat every share there as browsable so a consumer
+	// upgrade can safely roll out before the index does.
+	hasVisible, err := s.shareHasVisibleColumn(ctx)
+	if err != nil {
+		return err
+	}
+	query := `
+		SELECT id, share_code, COALESCE(receive_code, ''), COALESCE(share_title, ''), status, COALESCE(last_crawled_at, 0), COALESCE(group_id, 0)`
+	if hasVisible {
+		query += `, COALESCE(visible, 1)`
+	}
+	query += `
+		FROM share`
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return err
 	}
@@ -54,9 +69,15 @@ func (s *Store) RefreshShares(ctx context.Context) error {
 	shares := map[string]shareMeta{}
 	for rows.Next() {
 		var meta shareMeta
-		if err := rows.Scan(&meta.ID, &meta.ShareCode, &meta.ReceiveCode, &meta.ShareTitle, &meta.Status, &meta.LastCrawledAt, &meta.GroupID); err != nil {
+		var visible int64 = 1
+		if hasVisible {
+			if err := rows.Scan(&meta.ID, &meta.ShareCode, &meta.ReceiveCode, &meta.ShareTitle, &meta.Status, &meta.LastCrawledAt, &meta.GroupID, &visible); err != nil {
+				return err
+			}
+		} else if err := rows.Scan(&meta.ID, &meta.ShareCode, &meta.ReceiveCode, &meta.ShareTitle, &meta.Status, &meta.LastCrawledAt, &meta.GroupID); err != nil {
 			return err
 		}
+		meta.Visible = visible != 0
 		current, ok := shares[meta.ShareCode]
 		if !ok || preferShareMeta(meta, current) {
 			shares[meta.ShareCode] = meta
@@ -128,6 +149,17 @@ func (s *Store) RefreshShares(ctx context.Context) error {
 	return nil
 }
 
+// shareHasVisibleColumn reports whether the share table carries the visible
+// column added by the bulk-shares indexer release.
+func (s *Store) shareHasVisibleColumn(ctx context.Context) (bool, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM pragma_table_info('share') WHERE name = 'visible'`).Scan(&n); err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
 func preferShareMeta(next, current shareMeta) bool {
 	if next.Status == "ACTIVE" && current.Status != "ACTIVE" {
 		return true
@@ -164,6 +196,9 @@ func (s *Store) ListShares(ctx context.Context) ([]ShareSummary, error) {
 		item.GroupID = meta.GroupID
 		item.ReceiveCode = meta.ReceiveCode
 		item.ShareTitle = meta.ShareTitle
+		// A share with file rows but no share row is index corruption; default
+		// to browsable rather than silently hiding it.
+		item.Visible = meta.ShareCode == "" || meta.Visible
 		if item.ShareTitle == "" {
 			item.ShareTitle = item.ShareCode
 		}
