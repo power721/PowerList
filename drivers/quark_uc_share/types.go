@@ -124,3 +124,20 @@ type SortResp struct {
 		Way   string `json:"way"`
 	} `json:"metadata"`
 }
+
+// RecycleListResp /file/recycle/list 响应。回收站记录的 record_id 才是
+// /file/recycle/remove 的入参(select_mode=2 + record_list),不能直接用文件 fid。
+type RecycleListResp struct {
+	Resp
+	Data struct {
+		List []RecycleRecord `json:"list"`
+	} `json:"data"`
+	Metadata ListMetadata `json:"metadata"`
+}
+
+type RecycleRecord struct {
+	RecordId string `json:"record_id"`
+	Fid      string `json:"fid"`
+	FileName string `json:"file_name"`
+	Name     string `json:"name"`
+}

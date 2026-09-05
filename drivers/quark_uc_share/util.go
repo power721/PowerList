@@ -89,6 +89,8 @@ type shareRequestBinding interface {
 	accountLabel(d *QuarkUCShare) string
 	getTempFile(ctx context.Context, dirID, fileID string) (model.Obj, error)
 	deleteTempFile(ctx context.Context, fileID string) error
+	// purgeRecycleFile 把刚删除的临时文件从回收站彻底清掉(尽力而为,失败只记日志)。
+	purgeRecycleFile(fileID, fileName string)
 	link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error)
 	// cookieValue 返回该绑定账号的 Cookie,供走 drive-pc 端点的分享请求使用。
 	cookieValue() string
@@ -158,6 +160,32 @@ func (b requestBinding) deleteTempFile(_ context.Context, fileID string) error {
 		return errors.New(resp.Message)
 	}
 	return nil
+}
+
+// purgeRecycleFile /file/recycle/list 找到刚删除文件的 record_id 后 /file/recycle/remove 彻底清除。
+func (b requestBinding) purgeRecycleFile(fileID, fileName string) {
+	if b.requestDriver == nil {
+		return
+	}
+	recordId := listRecycleRecordID(func(page int) ([]RecycleRecord, int, error) {
+		var resp RecycleListResp
+		_, err := b.requestDriver.Request("/file/recycle/list", http.MethodGet, func(req *resty.Request) {
+			req.SetQueryParams(map[string]string{"_page": strconv.Itoa(page), "_size": "200"})
+		}, &resp)
+		return resp.Data.List, resp.Metadata.Total, err
+	}, fileID, fileName)
+	if recordId == "" {
+		return
+	}
+	var resp Resp
+	_, err := b.requestDriver.Request("/file/recycle/remove", http.MethodPost, func(req *resty.Request) {
+		req.SetBody(base.Json{"select_mode": 2, "record_list": []string{recordId}})
+	}, &resp)
+	if err != nil {
+		log.Debugf("[purge] recycle remove %s failed: %v", fileID, err)
+		return
+	}
+	log.Infof("[purge] 已从回收站彻底清除临时文件 %s", fileID)
 }
 
 func (b requestBinding) link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -240,6 +268,32 @@ func (b requestTVBinding) deleteTempFile(ctx context.Context, fileID string) err
 		return errors.New(resp.Message)
 	}
 	return nil
+}
+
+// purgeRecycleFile TV 账号与网盘账号同族 API,recycle 清理口径一致。
+func (b requestTVBinding) purgeRecycleFile(fileID, fileName string) {
+	if b.requestDriver == nil {
+		return
+	}
+	recordId := listRecycleRecordID(func(page int) ([]RecycleRecord, int, error) {
+		var resp RecycleListResp
+		_, err := b.requestDriver.Request(context.Background(), "/file/recycle/list", http.MethodGet, func(req *resty.Request) {
+			req.SetQueryParams(map[string]string{"_page": strconv.Itoa(page), "_size": "200"})
+		}, &resp)
+		return resp.Data.List, resp.Metadata.Total, err
+	}, fileID, fileName)
+	if recordId == "" {
+		return
+	}
+	var resp Resp
+	_, err := b.requestDriver.Request(context.Background(), "/file/recycle/remove", http.MethodPost, func(req *resty.Request) {
+		req.SetBody(base.Json{"select_mode": 2, "record_list": []string{recordId}})
+	}, &resp)
+	if err != nil {
+		log.Debugf("[purge] tv recycle remove %s failed: %v", fileID, err)
+		return
+	}
+	log.Infof("[purge] 已从TV账号回收站彻底清除临时文件 %s", fileID)
 }
 
 func (b requestTVBinding) link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -701,7 +755,7 @@ func (d *QuarkUCShare) saveAndLink(ctx context.Context, binding shareRequestBind
 		if parsed, perr := parseShareFileID(id); perr == nil {
 			key = savedFileKey(d, binding, parsed.FileID)
 		}
-		d.scheduleTempFileDelete(binding, file.GetID(), key)
+		d.scheduleTempFileDelete(binding, file.GetID(), file.GetName(), key)
 		// 网盘转存的文件走 speedup token 提速直链(dl-c 提速通道,实测 8x);
 		// TV 账号或 speedup 失败时回退 binding.link 的普通直链。
 		var link *model.Link
@@ -947,13 +1001,52 @@ type pendingDelete struct {
 	cacheKey string
 }
 
+// listRecycleRecordID 分页翻回收站找刚删除文件的 record_id;找不到返回空串(文件尚未入站/已自动清空)。
+// fetchPage 返回 (本页记录, 总数, 错误)。防御性上限 10 页(2000 条),超出说明回收站堆积严重,
+// 不值得为此刷爆请求——未清掉的记录 10 天后也会被网盘自动清空。
+func listRecycleRecordID(fetchPage func(page int) ([]RecycleRecord, int, error), fileID, fileName string) string {
+	for page := 1; page <= 10; page++ {
+		records, total, err := fetchPage(page)
+		if err != nil {
+			log.Debugf("[purge] recycle list page %d failed: %v", page, err)
+			return ""
+		}
+		if recordId := matchRecycleRecord(records, fileID, fileName); recordId != "" {
+			return recordId
+		}
+		if len(records) == 0 || (total > 0 && page*200 >= total) {
+			return ""
+		}
+	}
+	return ""
+}
+
+// matchRecycleRecord 优先按 fid 精确匹配;记录缺 fid 字段时按文件名兜底
+// (同名记录本就在回收站里,误清影响有限)。
+func matchRecycleRecord(records []RecycleRecord, fileID, fileName string) string {
+	for _, r := range records {
+		if r.Fid != "" && r.Fid == fileID {
+			return r.RecordId
+		}
+	}
+	if fileName == "" {
+		return ""
+	}
+	for _, r := range records {
+		if r.Fid == "" && (r.FileName == fileName || r.Name == fileName) {
+			return r.RecordId
+		}
+	}
+	return ""
+}
+
 // pendingDeletes: "<账号ID>:<临时文件ID>" -> *pendingDelete
 var pendingDeletes sync.Map
 
-// scheduleTempFileDelete 延迟删除转存出来的临时文件。
+// scheduleTempFileDelete 延迟删除转存出来的临时文件,删完再顺手把它从回收站彻底清掉。
 // 同一个临时文件只保留一个等待中的 goroutine,重复取链只把删除时间往后推:
 // 既避免长时间播放中途文件被删,也避免旧实现里「每次取链都 go 一个睡 900s 的 goroutine」的堆积。
-func (d *QuarkUCShare) scheduleTempFileDelete(binding shareRequestBinding, fileID, cacheKey string) {
+func (d *QuarkUCShare) scheduleTempFileDelete(binding shareRequestBinding, fileID, fileName, cacheKey string) {
 	delaySec := setting.GetInt(conf.DeleteDelayTime, 900)
 	if delaySec == 0 {
 		return
@@ -988,7 +1081,11 @@ func (d *QuarkUCShare) scheduleTempFileDelete(binding shareRequestBinding, fileI
 		// 用 Background:请求的 ctx 早就随响应结束被取消了。
 		if err := binding.deleteTempFile(context.Background(), fileID); err != nil {
 			log.Warnf("[%v] Delete %s temp file failed: %v %v", binding.accountID(), label, fileID, err)
+			return
 		}
+		// 回收站默认保留 10 天且期间照占账号空间;转存临时文件是 GB 级视频,
+		// 不彻底清掉会持续挤占空间(对齐 my.jar 0902 的 recycle 清理)。
+		binding.purgeRecycleFile(fileID, fileName)
 	}()
 }
 

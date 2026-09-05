@@ -93,7 +93,8 @@ func (d *QuarkOrUC) SaveCookie(cookie string) {
 func (d *QuarkOrUC) GetFiles(parent string) ([]model.Obj, error) {
 	files := make([]model.Obj, 0)
 	page := 1
-	size := 100
+	// 200/页对齐 UC 官方客户端口径,大目录翻页请求减半
+	size := 200
 	query := map[string]string{
 		"pdir_fid":             parent,
 		"_size":                strconv.Itoa(size),
