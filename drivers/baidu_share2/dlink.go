@@ -183,7 +183,7 @@ func (d *BaiduShare2) fetchFreshSekey(accountCookie string) (string, error) {
 			return "", fmt.Errorf("分享验证请求失败: %w", err)
 		}
 		if verifyResp.Errno != 0 {
-			return "", fmt.Errorf("分享验证失败(errno=%d): %s", verifyResp.Errno, res.String())
+			return "", fmt.Errorf("分享验证失败: %s", baiduErrnoMessage(verifyResp.Errno, res.String()))
 		}
 		hdr = mergeCookies(hdr, res.Cookies())
 	}

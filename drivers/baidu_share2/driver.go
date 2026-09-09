@@ -37,14 +37,22 @@ func isBaiduTransientErrno(errno int64) bool {
 	return baiduTransientErrnos[errno]
 }
 
-// baiduErrnoMessage 把常见 errno 翻译成可读文案。-21 的文案命中 alist-tvbox 的失效分享
-// 清理关键字,让真死链能被自动清掉;-9 可能是风控引起的瞬时错误,不映射成失效文案。
+// baiduErrnoMessage 把常见 errno 翻译成可读文案。-21/105 的文案命中 alist-tvbox 的失效分享
+// 清理关键字,让真死链能被自动清掉;-9 是混合态:share/list 的 show_msg 是「提取码验证失败」
+// (sekey 过期,重验证可自愈),但分享页同一 errno 显示「分享的文件已经被取消了」(线上实证),
+// 无法从 errno 单值区分死活,故文案含「提取码验证失败」命中 atv 的会话过期正则归瞬时
+// (streak 连击兜底退役),且不含「已取消」等失效字样连续串,防瞬时形态误判死。
 // -19/-62/-65 统一翻成带「请稍后」的限流文案:原始 body 的中文 show_msg 是 \uXXXX 转义,
 // alist-tvbox 的限流正则匹配不到转义串,翻译后的明文才能被正确归类为限流而非死链。
+// 105 = 分享页 404(分享不存在,线上实证 err_msg 恒空)。
 func baiduErrnoMessage(errno int64, body string) string {
 	switch errno {
 	case -21:
 		return "分享已取消或因违规无法访问(errno=-21)"
+	case 105:
+		return "分享不存在或文件已被删除(errno=105)"
+	case -9:
+		return "分享提取码验证失败,可能已被取消或会话过期(errno=-9)"
 	case -19:
 		return "访问频率太快,请稍后重试(errno=-19)"
 	case -62:
@@ -192,6 +200,17 @@ func (d *BaiduShare2) getInfo() error {
 	BDCLND := cookie.GetCookie(res.Cookies(), "BDCLND")
 	if BDCLND != nil {
 		d.Token = BDCLND.Value
+	}
+
+	// 错误页检测:死链 HTTP 仍 200,靠 <title> 区分(线上实证死链 title「百度网盘-链接不存在」,
+	// 带码活链 302 到输码页 title「百度网盘 请输入提取码」且页面含 shareid)。errno=-9 无法区分
+	// 提取码错误/链接不存在/sekey 过期(三种页面形态同码),开页阶段的 HTML 是唯一可靠死活分界;
+	// 文案含「分享不存在/已失效」命中 alist-tvbox 的死链与清理关键字,让真死链当场判死。
+	if m := regexp.MustCompile(`<title>\s*([^<]*)</title>`).FindStringSubmatch(res.String()); m != nil {
+		if t := m[1]; strings.Contains(t, "不存在") || strings.Contains(t, "取消") ||
+			strings.Contains(t, "删除") || strings.Contains(t, "过期") || strings.Contains(t, "违规") {
+			return fmt.Errorf("分享不存在或已失效: %s", t)
+		}
 	}
 
 	re := regexp.MustCompile(`shareid:\s*"(\d+)"`)

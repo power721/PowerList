@@ -295,3 +295,73 @@ func TestBaiduShare2SaveTo_RejectsNonBaiduTarget(t *testing.T) {
 		t.Fatalf("expected non-baidu target rejection, got %v", err)
 	}
 }
+
+// baiduErrnoMessage 翻译契约:-9 混合态(sekey 瞬时过期与分享被取消同码)文案须含
+// 「提取码验证失败」(命中 alist-tvbox 的会话过期正则归瞬时)且不含「已取消/失效/不存在」
+// 连续串(命中其失效清理关键字会被误判死);105/-21 死链文案则反之,须含失效措辞。
+func TestBaiduErrnoMessage(t *testing.T) {
+	cases := []struct {
+		errno int64
+		body  string
+		want  string
+	}{
+		{-9, `{"errno":-9,"err_msg":"","request_id":86674205666294610}`, "提取码验证失败"},
+		{105, `{"errno":105,"err_msg":"","request_id":86755293159184387}`, "分享不存在"},
+		{-21, ``, "分享已取消"},
+		{-19, ``, "访问频率太快"},
+		{-62, ``, "百度风控"},
+		{-65, ``, "操作过于频繁"},
+		{12, `{"errno":12,"show_msg":"文件已存在"}`, "文件已存在"},
+	}
+	for _, c := range cases {
+		if got := baiduErrnoMessage(c.errno, c.body); !strings.Contains(got, c.want) {
+			t.Errorf("errno %d: got %q, want contains %q", c.errno, got, c.want)
+		}
+	}
+	for _, gone := range []string{"已取消", "失效", "不存在", "expired", "cancel"} {
+		if msg := baiduErrnoMessage(-9, ""); strings.Contains(msg, gone) {
+			t.Errorf("-9 文案不得含失效措辞 %q(瞬时态会被 alist-tvbox 误判死): %q", gone, msg)
+		}
+	}
+	if msg := baiduErrnoMessage(105, ""); !strings.Contains(msg, "不存在") {
+		t.Errorf("105 文案须含「不存在」让 alist-tvbox 判死清理: %q", msg)
+	}
+}
+
+// getInfo 错误页检测:死链 HTTP 仍 200,靠 <title> 区分(线上实证「百度网盘-链接不存在」);
+// 带码活链 302 后的输码页 title 正常且含 shareid,不得误伤。errno=-9 三形态(提取码错误/
+// 链接不存在/sekey 过期)同码,HTML 开页是唯一可靠死活分界。
+func TestBaiduShare2GetInfo_ErrorPageTitle(t *testing.T) {
+	cases := []struct {
+		name    string
+		title   string
+		wantErr string
+	}{
+		{"死链-链接不存在", "百度网盘-链接不存在", "分享不存在或已失效"},
+		{"死链-已被取消", "百度网盘-分享的文件已经被取消", "分享不存在或已失效"},
+		{"活链-输码页", "百度网盘 请输入提取码", ""},
+		{"活链-分享页", "百度网盘-分享", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte("<html><head><title>" + c.title + "</title></head><body>" +
+					`shareid: "123"; share_uk: "456"; </body></html>`))
+			}))
+			defer srv.Close()
+			d := &BaiduShare2{Addition: Addition{Surl: "1abc"}}
+			d.client = resty.New().SetBaseURL(srv.URL)
+			err := d.getInfo()
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("live share must not error: %v", err)
+				}
+				if d.ShareId != "123" || d.ShareUk != "456" {
+					t.Fatalf("shareid/uk extraction broken: %q/%q", d.ShareId, d.ShareUk)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("dead share must surface %q, got %v", c.wantErr, err)
+			}
+		})
+	}
+}
