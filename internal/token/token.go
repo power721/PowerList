@@ -38,10 +38,20 @@ func SaveToken(item *model.Token) (err error) {
 }
 
 func SaveAccountToken(prefix, value string, accountId int) {
+	saveAccountToken(prefix, value, "", accountId)
+}
+
+// SaveAccountTokens 在 refresh_token 之外附带同步短寿命 access_token(光鸭仅 2h):
+// alist-tvbox 侧账号信息直读自存 access_token,不同步则其永远停在登录时刻的值、2h 后必失效。
+func SaveAccountTokens(prefix, refreshToken, accessToken string, accountId int) {
+	saveAccountToken(prefix, refreshToken, accessToken, accountId)
+}
+
+func saveAccountToken(prefix, refreshToken, accessToken string, accountId int) {
 	key := prefix + "_" + strconv.Itoa(accountId)
 	item := &model.Token{
 		Key:       key,
-		Value:     value,
+		Value:     refreshToken,
 		AccountId: accountId,
 		Modified:  time.Now(),
 	}
@@ -53,7 +63,10 @@ func SaveAccountToken(prefix, value string, accountId int) {
 
 	data := base.Json{
 		"name":  prefix,
-		"token": value,
+		"token": refreshToken,
+	}
+	if accessToken != "" {
+		data["access_token"] = accessToken
 	}
 	SyncTokens(accountId, data)
 }

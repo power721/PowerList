@@ -581,8 +581,9 @@ func (d *GuangYaPan) refreshToken(ctx context.Context) error {
 		d.RefreshToken = strings.TrimSpace(out.RefreshToken)
 	}
 	op.MustSaveDriverStorage(d)
-	// 同步(可能轮换的)refresh_token 回 alist-tvbox,避免其重启后用旧 refresh_token。镜像 drivers/123_open/token.go。
-	token.SaveAccountToken(conf.GUANGYA, d.RefreshToken, int(d.ID))
+	// 同步(可能轮换的)refresh_token 与 2h 寿命的 access_token 回 alist-tvbox:refresh_token 防其重建存储时用旧值,
+	// access_token 供其账号信息直读(登录时落库的那份 2h 后必死)。镜像 drivers/123_open/token.go。
+	token.SaveAccountTokens(conf.GUANGYA, d.RefreshToken, d.AccessToken, int(d.ID))
 	return nil
 }
 
@@ -640,6 +641,8 @@ func (d *GuangYaPan) loginBySMSCode(ctx context.Context) error {
 	d.VerificationID = ""
 	d.VerifyCode = ""
 	op.MustSaveDriverStorage(d)
+	// 短信登录会换发全新 refresh_token,不同步回 alist-tvbox 的话,其重建存储时会把旧 refresh_token 盖回来。
+	token.SaveAccountTokens(conf.GUANGYA, d.RefreshToken, d.AccessToken, int(d.ID))
 	return nil
 }
 
