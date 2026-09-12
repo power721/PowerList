@@ -242,6 +242,8 @@ func _fs(g *gin.RouterGroup) {
 	g.POST("/torrent/generate", handles.GenerateTorrentForPath)
 	// 分享服务端转存(源驱动实现 driver.ShareSaver 时可用)
 	g.POST("/share/save", handles.FsShareSave)
+	// 创建 115 永久分享(share/send + updateshare -1,快照语义)
+	g.POST("/share/create", handles.FsShareCreate)
 	// Direct upload (client-side upload to storage)
 	g.POST("/get_direct_upload_info", middlewares.FsUp, handles.FsGetDirectUploadInfo)
 }
