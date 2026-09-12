@@ -366,26 +366,29 @@ do:
 	}
 	body := res.Body()
 	code := utils.Json.Get(body, "code").ToInt()
-	if code != 0 && code != 200 {
-		if !isRetry && code == 401 {
-			if d.Addition.UseQrCodeLogin {
-				err := d.loginByQrCode()
-				if err != nil {
-					return nil, err
+		if code != 0 && code != 200 {
+			if !isRetry && code == 401 {
+				if d.Addition.UseQrCodeLogin {
+					err := d.loginByQrCode()
+					if err != nil {
+						return nil, err
+					}
+					isRetry = true
+					goto do
+				} else {
+					err := d.login()
+					if err != nil {
+						return nil, err
+					}
+					// 重登拿到的新 token 落库:否则只更新内存,addition 里的 accesstoken
+					// 保持旧值直到下次存储 Init,外部消费方(如 atv 账号信息)会一直读到过期 token
+					op.MustSaveDriverStorage(d)
+					isRetry = true
+					goto do
 				}
-				isRetry = true
-				goto do
-			} else {
-				err := d.login()
-				if err != nil {
-					return nil, err
-				}
-				isRetry = true
-				goto do
 			}
+			return nil, errors.New(jsoniter.Get(body, "message").ToString())
 		}
-		return nil, errors.New(jsoniter.Get(body, "message").ToString())
-	}
 	return body, nil
 }
 
