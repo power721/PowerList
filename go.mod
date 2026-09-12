@@ -42,7 +42,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/glebarez/go-sqlite v1.21.2
 	github.com/glebarez/sqlite v1.11.0
-	github.com/go-resty/resty/v2 v2.16.5
+	github.com/go-resty/resty/v2 v2.17.2
 	github.com/go-webauthn/webauthn v0.13.4
 	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/google/uuid v1.6.0
@@ -62,7 +62,7 @@ require (
 	github.com/ncw/swift/v2 v2.0.5
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/sftp v1.13.10
-	github.com/power721/115driver v0.2.6
+	github.com/power721/115driver v0.3.1
 	github.com/pquerna/otp v1.5.0
 	github.com/quic-go/quic-go v0.60.0
 	github.com/rclone/rclone v1.70.3
@@ -289,7 +289,7 @@ require (
 	github.com/shabbyrobe/gocovmerge v0.0.0-20230507112040-c3350d9342df // indirect
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
-	github.com/spf13/pflag v1.0.9 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/tklauser/go-sysconf v0.3.15 // indirect
 	github.com/tklauser/numcpus v0.10.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
