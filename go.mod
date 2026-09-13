@@ -62,7 +62,7 @@ require (
 	github.com/ncw/swift/v2 v2.0.5
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/sftp v1.13.10
-	github.com/power721/115driver v0.3.1
+	github.com/power721/115driver v0.3.2
 	github.com/pquerna/otp v1.5.0
 	github.com/quic-go/quic-go v0.60.0
 	github.com/rclone/rclone v1.70.3
