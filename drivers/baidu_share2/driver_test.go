@@ -328,6 +328,85 @@ func TestBaiduErrnoMessage(t *testing.T) {
 	}
 }
 
+// stubAccountCookie 隔离 op:单测里 GetFirstDriver 缓存未命中落 db 查询会死锁,恒返回空 Cookie。
+func stubAccountCookie(cookie string) func() {
+	orig := baiduAccountCookie
+	baiduAccountCookie = func() string { return cookie }
+	return func() { baiduAccountCookie = orig }
+}
+
+// List 入口校验失败(verify 连吃 -62 风控拿不到 randsk)且 Token 仍为空时,须直接返回 verify 的
+// 真实错误,不再拿空 sekey 去 /share/list 白挨一发 -9「提取码验证失败」遮住根因
+// (2026-09-24 线上实证:4 发 verify 全 -62,用户看到的却是 -9 文案,被带偏去查提取码/死链)。
+func TestBaiduShare2List_EntryValidateFailSurfacesVerifyError(t *testing.T) {
+	restore := stubAccountCookie("")
+	defer restore()
+
+	verifyCalls, listCalls := 0, 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/share/verify" {
+			verifyCalls++
+			_, _ = w.Write([]byte(`{"errno":-62,"request_id":1}`))
+			return
+		}
+		listCalls++
+		t.Errorf("must not call %v when entry validate failed", r.URL.Path)
+	}))
+	defer srv.Close()
+
+	d := &BaiduShare2{Addition: Addition{Surl: "1abc", Pwd: "yptv"}}
+	d.client = resty.New().SetBaseURL(srv.URL)
+
+	_, err := d.List(context.Background(), &model.Object{Path: "/"}, model.ListArgs{})
+	if err == nil || !strings.Contains(err.Error(), "百度风控") {
+		t.Fatalf("expected -62 throttle error from verify, got %v", err)
+	}
+	if verifyCalls != 2 { // Validate 对 -62 内含一次 2s 退避重试
+		t.Errorf("expected 2 verify calls (internal -62 retry), got %d", verifyCalls)
+	}
+	if listCalls != 0 {
+		t.Errorf("/share/list must not be hit with empty sekey, got %d calls", listCalls)
+	}
+	if d.Token != "" {
+		t.Errorf("token must stay empty on failed validate, got %q", d.Token)
+	}
+}
+
+// List 遇瞬时 -9(sekey 过期)清 Token 重验证,重验证也失败时须透出 verify 的错误,
+// 而非沿用旧列表响应的 -9 文案——文案错会误导排查,也会让 alist-tvbox 把风控误归类。
+func TestBaiduShare2List_RevalidateFailSurfacesVerifyError(t *testing.T) {
+	restore := stubAccountCookie("")
+	defer restore()
+
+	listCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/share/list":
+			listCalls++
+			_, _ = w.Write([]byte(`{"errno":-9,"show_msg":"提取码验证失败,请重试","list":[]}`))
+		case "/share/verify":
+			_, _ = w.Write([]byte(`{"errno":105,"err_msg":""}`))
+		}
+	}))
+	defer srv.Close()
+
+	d := &BaiduShare2{Addition: Addition{Surl: "1abc", Pwd: "yptv"}, Token: "stale-sekey"}
+	d.client = resty.New().SetBaseURL(srv.URL)
+
+	_, err := d.List(context.Background(), &model.Object{Path: "/"}, model.ListArgs{})
+	if err == nil || !strings.Contains(err.Error(), "errno=105") {
+		t.Fatalf("expected re-validate error (errno=105) to surface, got %v", err)
+	}
+	if strings.Contains(err.Error(), "提取码验证失败") {
+		t.Fatalf("stale -9 list message must not mask the real cause, got %v", err)
+	}
+	if listCalls != 1 {
+		t.Errorf("list should run once then bail on failed re-validate, got %d calls", listCalls)
+	}
+}
+
 // getInfo 错误页检测:死链 HTTP 仍 200,靠 <title> 区分(线上实证「百度网盘-链接不存在」);
 // 带码活链 302 后的输码页 title 正常且含 shareid,不得误伤。errno=-9 三形态(提取码错误/
 // 链接不存在/sekey 过期)同码,HTML 开页是唯一可靠死活分界。

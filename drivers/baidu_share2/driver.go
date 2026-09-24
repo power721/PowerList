@@ -66,7 +66,8 @@ func baiduErrnoMessage(errno int64, body string) string {
 
 // baiduAccountCookie 取第一个百度网盘账号的 Cookie。verify/开分享页带上账号 Cookie
 // 可显著降低 -62 风控(裸 netdisk UA 从服务器 IP 高频访问极易触发),并使 sekey 与账号同源。
-func (d *BaiduShare2) baiduAccountCookie() string {
+// 声明为 var 便于单测替换(测试里 op 未初始化,GetFirstDriver 缓存未命中落 db 查询会死锁)。
+var baiduAccountCookie = func() string {
 	storage := op.GetFirstDriver("BaiduNetdisk", 0)
 	if storage == nil {
 		return ""
@@ -143,7 +144,7 @@ func (d *BaiduShare2) Validate() error {
 			Message string `json:"err_msg"`
 			Token   string `json:"randsk"`
 		}{}
-		accountCookie := d.baiduAccountCookie()
+		accountCookie := baiduAccountCookie()
 		if accountCookie != "" {
 			// 带账号 Cookie 开分享页,降低 -62 风控概率
 			res0, err := d.client.R().SetHeader("Cookie", accountCookie).Get("/s/" + d.Surl)
@@ -237,7 +238,13 @@ func (d *BaiduShare2) getInfo() error {
 
 func (d *BaiduShare2) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
 	if d.Token == "" {
-		d.Validate()
+		// 校验失败且仍无 Token(多为 -62 风控拿不到 randsk)时直接透出 verify 的真实错误:
+		// 空 sekey 去 /share/list 必吃 -9「提取码验证失败」,白挨一发还把根因文案遮住
+		// (2026-09-24 线上实证:4 发 verify 全 -62,最终文案却是 -9)。verify 已拿到 Token
+		// 而 getInfo 瞬时失败的形态仍继续列目录(保留旧宽松行为)。
+		if verr := d.Validate(); verr != nil && d.Token == "" {
+			return nil, verr
+		}
 	}
 	reqDir := dir.GetPath()
 	isRoot := "0"
@@ -308,17 +315,22 @@ func (d *BaiduShare2) List(ctx context.Context, dir model.Obj, args model.ListAr
 					more = true
 				}
 			} else {
-				// 瞬时错误(-9 sekey 过期/-62 风控):清 Token 重新 Validate 后重试本页一次
+				listErr := fmt.Errorf("%s", baiduErrnoMessage(respJson.Errno, res.String()))
+				// 瞬时错误(-9 sekey 过期/-62 风控):清 Token 重新 Validate 后重试本页一次;
+				// 重验证失败时透出 verify 的真实错误(多为 -62 风控,翻译文案带「请稍后」能被
+				// alist-tvbox 限流正则正确归类),别用列表的旧 -9 文案遮住根因
 				if !revalidated && isBaiduTransientErrno(respJson.Errno) {
 					revalidated = true
 					d.Token = ""
-					if verr := d.Validate(); verr == nil {
+					verr := d.Validate()
+					if verr == nil {
 						log.Infof("Baidu share list errno=%d, re-validated token and retrying page %d", respJson.Errno, page)
 						more = true
 						continue
 					}
+					listErr = verr
 				}
-				err = fmt.Errorf("%s", baiduErrnoMessage(respJson.Errno, res.String()))
+				err = listErr
 			}
 		}
 	}
@@ -361,7 +373,11 @@ func (d *BaiduShare2) link(ctx context.Context, file model.Obj, args model.LinkA
 	log.Infof("[%v] 获取百度文件直链 %v %v %v", bd.ID, file.GetName(), file.GetID(), file.GetSize())
 
 	if d.Token == "" {
-		d.Validate()
+		// 同 List 入口:校验失败且仍无 Token 时直接透出 verify 的真实错误,
+		// 别拿空 sekey 去 /share/transfer 白挨一发转存报错
+		if verr := d.Validate(); verr != nil && d.Token == "" {
+			return nil, verr
+		}
 	}
 	f, err := d.saveFile(file.GetID(), bd)
 	if err != nil {
