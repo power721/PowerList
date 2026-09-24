@@ -110,8 +110,10 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 	// 多账号分片并行下载(开关开):直接对所有网盘账号 goroutine 并发取链,
 	// 跳过串行的 resolveQuarkUCShareLink(它失败才换下一个账号,慢;且会让主链账号被重复取)。
 	// 首个账号成功后只额外等 2s 收集更多源,不等最慢账号,启播≈首源+2s。
+	// eligible=false(账号数<2)时回落下方单账号串行路径 —— 免转存直链短寿命且强校验
+	// Cookie 归属,单账号用户不能被静默降级过去。
 	if multiSourceEnabled(d) {
-		links := collectMultiAccountLinks(ctx, d, file, args)
+		links, eligible := collectMultiAccountLinks(ctx, d, file, args)
 		if len(links) > 0 {
 			link := links[0]
 			if len(links) > 1 {
@@ -121,19 +123,22 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 			quarkUCShareLinkCache.Set(key, link)
 			return link, nil
 		}
-		// 全部账号取链失败,回退免转存兜底(免转存开关关时跳过)。
-		if !shareDirectEnabled(d) {
-			return nil, errors.New("[multi-source] 全部账号取链失败且免转存已关闭")
+		if eligible {
+			// 全部账号取链失败,回退免转存兜底(免转存开关关时跳过)。
+			if !shareDirectEnabled(d) {
+				return nil, errors.New("[multi-source] 全部账号取链失败且免转存已关闭")
+			}
+			log.Warnf("[multi-source] 全部账号取链失败,回退免转存")
+			link, err := resolveShareDirectLink(d, file)
+			if err == nil && link != nil {
+				quarkUCShareLinkCache.Set(key, link)
+			}
+			return link, err
 		}
-		log.Warnf("[multi-source] 全部账号取链失败,回退免转存")
-		link, err := resolveShareDirectLink(d, file)
-		if err == nil && link != nil {
-			quarkUCShareLinkCache.Set(key, link)
-		}
-		return link, err
+		// eligible=false(账号数不足):走下方单账号串行转存路径。
 	}
 
-	// 开关关:转存 + speedup 为主(串行轮询账号,失败换下一个),免转存兜底(免转存开关开时)。
+	// 开关关 / 账号数不足:转存 + speedup 为主(串行轮询账号,失败换下一个),免转存兜底(免转存开关开时)。
 	var link *model.Link
 	var err error
 	link, err = resolveQuarkUCShareLink(ctx, d, file, args)

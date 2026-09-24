@@ -873,7 +873,8 @@ func (d *QuarkUCShare) socialRequest(cookie, pathname, body string) (map[string]
 }
 
 // getSpeedupToken 取(并缓存)某个转存文件的下载提速 token。
-func (d *QuarkUCShare) getSpeedupToken(cookie, savedFid, fileName string) (string, error) {
+// 声明为 var 便于单测替换(离线桩 token,免聊天会话网络)。
+var getSpeedupToken = func(d *QuarkUCShare, cookie, savedFid, fileName string) (string, error) {
 	if v, ok := speedupCache.Load(savedFid); ok {
 		if e := v.(speedupEntry); e.token != "" && time.Now().UnixMilli() < e.expire-60000 {
 			log.Infof("[speedup] 命中缓存 token=%s fid=%s", short(e.token), savedFid)
@@ -933,7 +934,8 @@ func (d *QuarkUCShare) getSpeedupToken(cookie, savedFid, fileName string) (strin
 // speedupDownload 走 drive-pc(PC 客户端)端点取带 token 的提速直链。
 // 关键:必须用 drive-pc.quark.cn;quark_uc 默认的 drive.quark.cn 对带 speedup token 的请求
 // 会返回 "download file size limit",只有 PC 客户端端点接受 speedup token(my.jar 也走 drive-pc)。
-func (d *QuarkUCShare) speedupDownload(cookie, savedFid, token string) (string, error) {
+// 声明为 var 便于单测替换(离线桩直链)。
+var speedupDownload = func(d *QuarkUCShare, cookie, savedFid, token string) (string, error) {
 	u := "https://drive-pc.quark.cn/1/clouddrive/file/download?pr=ucpro&fr=pc"
 	req := base.RestyClient.R()
 	req.SetHeaders(map[string]string{
@@ -970,12 +972,12 @@ func (d *QuarkUCShare) speedupLink(ctx context.Context, rb requestBinding, saved
 		return rb.link(ctx, savedFile, args)
 	}
 	savedFid := savedFile.GetID()
-	token, err := d.getSpeedupToken(rb.cookie, savedFid, savedFile.GetName())
+	token, err := getSpeedupToken(d, rb.cookie, savedFid, savedFile.GetName())
 	if err != nil {
 		log.Warnf("[speedup] token 获取失败,回退普通直链: %v", err)
 		return rb.link(ctx, savedFile, args)
 	}
-	downloadUrl, err := d.speedupDownload(rb.cookie, savedFid, token)
+	downloadUrl, err := speedupDownload(d, rb.cookie, savedFid, token)
 	if err != nil {
 		log.Warnf("[speedup] 带 token 的 file/download 失败,回退普通直链: %v", err)
 		return rb.link(ctx, savedFile, args)
@@ -984,8 +986,12 @@ func (d *QuarkUCShare) speedupLink(ctx context.Context, rb requestBinding, saved
 	// dl-c-* = 提速通道; dl-pc-* = 普通限速通道。
 	log.Infof("[speedup] 提速直链 host=%s (dl-c=加速/dl-pc=普通) fid=%s", host, savedFid)
 	uc := rb.requestDriver
+	// URL 带 #storageId 片段标记,对齐 quark_uc.getDownloadLink:alist-tvbox 按它解析取链账号
+	// 并下发匹配 Cookie。dl-c 提速直链缺此标记时客户端只能回落 master Cookie,多账号并发下
+	// 首条链常来自非 master 账号 → Cookie 归属错配被 CDN 拒(实测 412)。片段不会发往 CDN;
+	// multi_source 各源经 sourceFromLink 统一剥除 # 片段,不受影响。
 	return &model.Link{
-		URL: downloadUrl,
+		URL: downloadUrl + fmt.Sprintf("#storageId=%d", uc.ID),
 		Header: http.Header{
 			"Cookie":     []string{rb.cookie},
 			"Referer":    []string{d.conf.referer},
@@ -1208,13 +1214,17 @@ func multiSourceMax() int {
 // 并发调用只会取到同一条链。
 // 启播策略:所有账号同时跑,第一个成功后只额外等 firstSourceGrace(2s)收集更多源就返回,
 // 不等最慢的账号 —— 这样启播≈首源时间+2s,慢账号不拖垮启播。总数受 multiSourceMax() 限制。
+// 第二返回值 eligible=false 表示账号数不足(<2)不适用多账号路径 —— 调用方须回落单账号
+// 串行转存路径,而不是当作「全部账号取链失败」回退免转存(免转存直链短寿命且强校验
+// Cookie 归属,单账号用户开着开关会被静默降级到不可用链路)。
 // 声明为 var 便于单测替换(避免单测里 op 未初始化)。
-var collectMultiAccountLinks = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) []*model.Link {
+var collectMultiAccountLinks = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) ([]*model.Link, bool) {
 	collectStart := time.Now()
 	name := d.getDriverName()
 	storages := op.GetStorages(name)
 	if len(storages) < 2 {
-		return nil
+		log.Infof("[multi-source] %s 网盘账号仅 %d 个,回落单账号转存路径", name, len(storages))
+		return nil, false
 	}
 	max := multiSourceMax()
 	n := len(storages)
@@ -1268,7 +1278,7 @@ var collectMultiAccountLinks = func(ctx context.Context, d *QuarkUCShare, file m
 		case l, ok := <-results:
 			if !ok {
 				log.Infof("[multi-source] collect: driver=%s accounts=%d collected=%d 总耗时=%v(全部结束)", name, len(storages), len(links), time.Since(collectStart))
-				return links
+				return links, true
 			}
 			links = append(links, l)
 			if !firstDone {
@@ -1278,10 +1288,10 @@ var collectMultiAccountLinks = func(ctx context.Context, d *QuarkUCShare, file m
 		case <-afterFirst.C:
 			log.Infof("[multi-source] collect: driver=%s accounts=%d collected=%d 总耗时=%v(首源+%v窗口)", name, len(storages), len(links), time.Since(collectStart), multiSourceFirstGrace())
 			cancel() // 停止仍在跑的慢账号
-			return links
+			return links, true
 		case <-collectCtx.Done():
 			log.Infof("[multi-source] collect: driver=%s accounts=%d collected=%d 总耗时=%v(超时)", name, len(storages), len(links), time.Since(collectStart))
-			return links
+			return links, true
 		}
 	}
 }
