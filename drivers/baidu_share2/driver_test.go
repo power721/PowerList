@@ -283,6 +283,86 @@ func TestBaiduShare2SaveTo_ApiErrorPropagates(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "文件已存在") {
 		t.Fatalf("expected api error to propagate, got %v", err)
 	}
+	if !strings.Contains(err.Error(), "errno=12") {
+		t.Fatalf("transfer error must carry errno for diagnosis, got %v", err)
+	}
+}
+
+// 半初始化自愈(2026-09-27 线上实证):getInfo 吃到降级页 → ShareId/ShareUk 空而 Token 在,
+// 转存须先重新 Validate 补齐分享参数再发起,拿补齐后的 shareid/from 打 /share/transfer。
+func TestBaiduShare2SaveTo_EmptyShareIdSelfHeals(t *testing.T) {
+	restore := stubAccountCookie("")
+	defer restore()
+
+	pageCalls, transferCalls := 0, 0
+	var gotShareId, gotFrom string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/share/transfer":
+			transferCalls++
+			gotShareId = r.URL.Query().Get("shareid")
+			gotFrom = r.URL.Query().Get("from")
+			_, _ = w.Write([]byte(`{"errno":0,"extra":{"list":[` +
+				`{"from_fs_id":111,"to":"/t/a.nfo","to_fs_id":900001}]}}`))
+		default: // getInfo 开页(/s/1abc)
+			pageCalls++
+			_, _ = w.Write([]byte(`<html><body>shareid: "888"; share_uk: "999";</body></html>`))
+		}
+	}))
+	defer srv.Close()
+
+	d := &BaiduShare2{Addition: Addition{Surl: "1abc"}, Token: "tok-but-no-shareid"}
+	d.client = resty.New().SetBaseURL(srv.URL)
+	bd := &baidu_netdisk.BaiduNetdisk{}
+	bd.Cookie = "BDUSS=abc"
+	dst := &model.Object{ID: "1", Name: "t", Path: "/t", IsFolder: true}
+
+	saved, err := d.SaveTo(context.Background(), bd, dst, []model.Obj{&model.Object{ID: "111", Name: "a.nfo"}})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if strings.Join(saved, ",") != "900001" {
+		t.Errorf("expected saved [900001], got %v", saved)
+	}
+	if pageCalls != 1 || transferCalls != 1 {
+		t.Fatalf("expected 1 re-validate page + 1 transfer, got %d/%d", pageCalls, transferCalls)
+	}
+	if gotShareId != "888" || gotFrom != "999" {
+		t.Errorf("transfer must carry healed shareid/from, got %q/%q", gotShareId, gotFrom)
+	}
+}
+
+// 重验证后 shareid 仍解析不到(页面持续降级)时,须透出明确文案并拦下发,
+// 不得拿空 shareid 打 /share/transfer 换回模糊的 errno=2「参数错误」。
+func TestBaiduShare2SaveTo_EmptyShareIdStillMissingSurfacesClearError(t *testing.T) {
+	restore := stubAccountCookie("")
+	defer restore()
+
+	transferCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/share/transfer" {
+			transferCalls++
+		}
+		_, _ = w.Write([]byte(`<html><body>degraded page without shareid</body></html>`))
+	}))
+	defer srv.Close()
+
+	d := &BaiduShare2{Addition: Addition{Surl: "1abc"}, Token: "tok-but-no-shareid"}
+	d.client = resty.New().SetBaseURL(srv.URL)
+	bd := &baidu_netdisk.BaiduNetdisk{}
+	bd.Cookie = "BDUSS=abc"
+	dst := &model.Object{ID: "1", Name: "t", Path: "/t", IsFolder: true}
+
+	_, err := d.SaveTo(context.Background(), bd, dst, []model.Obj{&model.Object{ID: "111", Name: "a.nfo"}})
+	if err == nil || !strings.Contains(err.Error(), "shareid") {
+		t.Fatalf("expected clear shareid-missing error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "参数错误") {
+		t.Fatalf("must not surface baidu's vague errno=2 text, got %v", err)
+	}
+	if transferCalls != 0 {
+		t.Fatalf("transfer must not fire with empty shareid, got %d calls", transferCalls)
+	}
 }
 
 // 目标存储不是百度网盘账号驱动(如夸克账号)时拒绝,不发起任何请求。
@@ -423,6 +503,8 @@ func TestBaiduShare2GetInfo_ErrorPageTitle(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			restore := stubAccountCookie("")
+			defer restore()
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				_, _ = w.Write([]byte("<html><head><title>" + c.title + "</title></head><body>" +
 					`shareid: "123"; share_uk: "456"; </body></html>`))
@@ -442,5 +524,164 @@ func TestBaiduShare2GetInfo_ErrorPageTitle(t *testing.T) {
 				t.Fatalf("dead share must surface %q, got %v", c.wantErr, err)
 			}
 		})
+	}
+}
+
+// getInfo 开页必须带账号 Cookie(对齐 verify 的防风控做法):裸 netdisk UA 高频开页吃到无
+// shareid 的降级页,会让存储停留在「Token 有效但 ShareId 空」的半初始化态(2026-09-27 线上
+// 实证:126 个分享连续中招,转存全数 errno=2「参数错误」)。
+func TestBaiduShare2GetInfo_SendsAccountCookie(t *testing.T) {
+	restore := stubAccountCookie("BDUSS=acct")
+	defer restore()
+
+	var gotCookie string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCookie = r.Header.Get("Cookie")
+		_, _ = w.Write([]byte(`<html><body>shareid: "123"; share_uk: "456";</body></html>`))
+	}))
+	defer srv.Close()
+
+	d := &BaiduShare2{Addition: Addition{Surl: "1abc"}}
+	d.client = resty.New().SetBaseURL(srv.URL)
+	if err := d.getInfo(); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if gotCookie != "BDUSS=acct" {
+		t.Fatalf("getInfo must send account cookie, got %q", gotCookie)
+	}
+}
+
+// stubTransferCooldown 隔离全局转存熔断状态,测试间互不污染。
+func stubTransferCooldown(t time.Time) func() {
+	orig := baiduTransferCooldown
+	baiduTransferCooldown = t
+	return func() { baiduTransferCooldown = orig }
+}
+
+// 转存频控熔断:转存兜底报 -70(转存太快)即进入冷却,冷却期内快速失败零请求,
+// 不让 strm 风暴的百余次尝试白发还加深限流(2026-09-27 线上实证窗口跨 3 小时周期)。
+func TestBaiduShare2Link_TransferRateLimitTripCooldown(t *testing.T) {
+	restore := stubTransferCooldown(time.Time{})
+	defer restore()
+
+	transferCalls := 0
+	r := stubResolvers(
+		func(d *BaiduShare2, file model.Obj) (*model.Link, error) {
+			return nil, errors.New("direct off")
+		},
+		func(ctx context.Context, d *BaiduShare2, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+			transferCalls++
+			return nil, errors.New("转存太快，请稍后再试(errno=-70)")
+		},
+	)
+	defer r()
+	baiduShareDirectEnabled = func() bool { return false }
+
+	d := &BaiduShare2{}
+	file := &model.Object{ID: "file-1", Name: "v.mp4"}
+
+	_, err := d.Link(context.Background(), file, model.LinkArgs{})
+	if err == nil || !strings.Contains(err.Error(), "errno=-70") {
+		t.Fatalf("expected -70 error, got %v", err)
+	}
+	if !time.Now().Before(baiduTransferCooldown) {
+		t.Fatalf("cooldown must be armed after -70, got %v", baiduTransferCooldown)
+	}
+	_, err = d.Link(context.Background(), file, model.LinkArgs{})
+	if err == nil || !strings.Contains(err.Error(), "冷却") {
+		t.Fatalf("expected fast-fail cooldown error, got %v", err)
+	}
+	if transferCalls != 1 {
+		t.Fatalf("cooldown must fast-fail without firing transfer, got %d calls", transferCalls)
+	}
+}
+
+// 冷却到期后恢复探测:不把临时频控变成永久失败。
+func TestBaiduShare2Link_CooldownExpiredProbesAgain(t *testing.T) {
+	restore := stubTransferCooldown(time.Now().Add(-time.Minute))
+	defer restore()
+
+	transferCalls := 0
+	r := stubResolvers(
+		nil,
+		func(ctx context.Context, d *BaiduShare2, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+			transferCalls++
+			return &model.Link{URL: "https://transfer/" + file.GetID()}, nil
+		},
+	)
+	defer r()
+	baiduShareDirectEnabled = func() bool { return false }
+
+	d := &BaiduShare2{}
+	link, err := d.Link(context.Background(), &model.Object{ID: "f1"}, model.LinkArgs{})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if transferCalls != 1 || !strings.HasPrefix(link.URL, "https://transfer/") {
+		t.Fatalf("expired cooldown must probe transfer again, got %d calls", transferCalls)
+	}
+}
+
+// 熔断只作用于转存兜底:免转存主路径命中时,即便转存冷却中也照常返回直链。
+func TestBaiduShare2Link_DirectBypassesTransferCooldown(t *testing.T) {
+	restore := stubTransferCooldown(time.Now().Add(10 * time.Minute))
+	defer restore()
+
+	transferCalls := 0
+	r := stubResolvers(
+		func(d *BaiduShare2, file model.Obj) (*model.Link, error) {
+			return &model.Link{URL: "https://d.pcs.baidu.com/dlna/" + file.GetID()}, nil
+		},
+		func(ctx context.Context, d *BaiduShare2, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+			transferCalls++
+			return nil, errors.New("must not reach transfer")
+		},
+	)
+	defer r()
+
+	d := &BaiduShare2{}
+	link, err := d.Link(context.Background(), &model.Object{ID: "f1"}, model.LinkArgs{})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if transferCalls != 0 || !strings.HasPrefix(link.URL, "https://d.pcs.baidu.com/dlna/") {
+		t.Fatalf("direct path must bypass cooldown, got %d transfer calls", transferCalls)
+	}
+}
+
+// sekey 按存储缓存:免转存默认开后,刮削风暴逐链 verify+开页会复刻 -62 风控,
+// 命中缓存零请求;失效(Delete)后重新取;取失败透出错误交调用方回退。
+func TestAcquireDlnaSekey_CacheAndRefetch(t *testing.T) {
+	origCache, origFetch := baiduDirectSekeyCache, fetchFreshSekey
+	baiduDirectSekeyCache = cache.NewKeyedCache[string](30 * time.Minute)
+	fetchCalls := 0
+	fetchFreshSekey = func(d *BaiduShare2, accountCookie string) (string, error) {
+		fetchCalls++
+		return "sekey-" + strings.ToLower(accountCookie), nil
+	}
+	defer func() {
+		baiduDirectSekeyCache, fetchFreshSekey = origCache, origFetch
+	}()
+
+	d := &BaiduShare2{}
+	s1, cached1, err := acquireDlnaSekey(d, "BDUSS=x")
+	if err != nil || s1 != "sekey-bduss=x" || cached1 {
+		t.Fatalf("first acquire must fetch fresh: %q %v %v", s1, cached1, err)
+	}
+	s2, cached2, err := acquireDlnaSekey(d, "BDUSS=x")
+	if err != nil || s2 != s1 || !cached2 || fetchCalls != 1 {
+		t.Fatalf("second acquire must hit cache: %q %v %v fetch=%d", s2, cached2, err, fetchCalls)
+	}
+	baiduDirectSekeyCache.Delete("0")
+	if _, cached3, _ := acquireDlnaSekey(d, "BDUSS=x"); cached3 || fetchCalls != 2 {
+		t.Fatalf("after invalidate must refetch: cached=%v fetch=%d", cached3, fetchCalls)
+	}
+
+	fetchFreshSekey = func(d *BaiduShare2, accountCookie string) (string, error) {
+		return "", errors.New("risk controlled")
+	}
+	baiduDirectSekeyCache.Delete("0")
+	if _, _, err := acquireDlnaSekey(d, "BDUSS=x"); err == nil {
+		t.Fatalf("fetch failure must surface error")
 	}
 }

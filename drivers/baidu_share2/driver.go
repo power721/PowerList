@@ -37,6 +37,22 @@ func isBaiduTransientErrno(errno int64) bool {
 	return baiduTransientErrnos[errno]
 }
 
+// 转存频控熔断:-70(转存太快)/-65(操作太快)是账号级长效限流,继续打只会加深限流
+// (2026-09-27 线上实证:一轮 strm 刮削风暴约 50 次转存即触发,窗口跨 3 小时周期未放开,
+// 风暴内百余次尝试全部无效白发)。命中即进入冷却,冷却期内转存兜底快速失败零请求;
+// 免转存主路径不受影响;SaveTo 是用户显式动作,不经此熔断。
+var baiduTransferCooldown time.Time
+
+const baiduTransferCooldownDuration = 10 * time.Minute
+
+func isBaiduTransferRateLimitErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "errno=-70") || strings.Contains(msg, "errno=-65")
+}
+
 // baiduErrnoMessage 把常见 errno 翻译成可读文案。-21/105 的文案命中 alist-tvbox 的失效分享
 // 清理关键字,让真死链能被自动清掉;-9 是混合态:share/list 的 show_msg 是「提取码验证失败」
 // (sekey 过期,重验证可自愈),但分享页同一 errno 显示「分享的文件已经被取消了」(线上实证),
@@ -79,7 +95,8 @@ var baiduAccountCookie = func() string {
 	return bd.Cookie
 }
 
-// baiduShareDirectEnabled 是否启用百度分享免转存(DLNA 签名直链为主、转存兜底)。默认关:关时直接走转存。
+// baiduShareDirectEnabled 是否启用百度分享免转存(DLNA 签名直链为主、转存兜底)。默认开(对齐
+// 夸克/UC 免转存默认):strm 刮削风暴走免转存可消掉全部转存频控压力;关掉则直接走转存。
 // 声明为 var 便于单测替换(测试里 op 未初始化,直接 setting.GetBool 会死锁)。
 var baiduShareDirectEnabled = func() bool {
 	return setting.GetBool(conf.BaiduShareDirect)
@@ -193,7 +210,11 @@ func (d *BaiduShare2) Validate() error {
 
 func (d *BaiduShare2) getInfo() error {
 	api := "/s/" + d.Surl
+	// 带账号 Cookie 开页,对齐 verify 的防风控做法:裸 netdisk UA 高频开页易吃到无 shareid 的
+	// 降级页(2026-09-27 线上实证:重启后 strm 风暴集中重验证,126 个分享连吃无 shareid 降级页,
+	// 转存全数 errno=2「参数错误」且无自愈路径)
 	res, err := d.client.R().
+		SetHeader("Cookie", baiduAccountCookie()).
 		Get(api)
 	if err != nil {
 		return err
@@ -220,7 +241,8 @@ func (d *BaiduShare2) getInfo() error {
 		d.ShareId = matches[1]
 		log.Debugf("Share ID: %v", d.ShareId)
 	} else {
-		log.Warn("Share ID not found")
+		// 须带存储上下文:匿名告警在数百个聚合分享里无法定位是哪个挂载吃了降级页
+		log.Warnf("[%v] shareid not found on /s/%v (degraded page?)", d.ID, d.Surl)
 	}
 
 	re = regexp.MustCompile(`share_uk:\s*"(\d+)"`)
@@ -229,7 +251,7 @@ func (d *BaiduShare2) getInfo() error {
 		d.ShareUk = matches[1]
 		log.Debugf("Share UK: %v", d.ShareUk)
 	} else {
-		log.Warn("Share UK not found")
+		log.Warnf("[%v] share_uk not found on /s/%v (degraded page?)", d.ID, d.Surl)
 	}
 
 	log.Debugf("Share Token: %v", d.Token)
@@ -344,8 +366,8 @@ func (d *BaiduShare2) Link(ctx context.Context, file model.Obj, args model.LinkA
 	}
 
 	// 免转存(原画(无限),DLNA 签名直链)为主、转存(save+delete)兜底,两条路互为补充。
-	// 免转存直链不限速、免 Cookie、省空间省等待;失败时回退转存,保证可用性。
-	// 开关默认关:关时跳过免转存,直接走转存(分支前行为)。
+	// 免转存直链不限速、免 Cookie、省空间省等待、零转存零频控;失败时回退转存,保证可用性。
+	// 开关默认开(对齐夸克/UC 免转存默认):关掉则回退纯转存(分支前行为)。
 	var link *model.Link
 	var err error
 	if baiduShareDirectEnabled() {
@@ -355,7 +377,15 @@ func (d *BaiduShare2) Link(ctx context.Context, file model.Obj, args model.LinkA
 		if err != nil {
 			log.Warnf("百度免转存失败,回退转存: %v", err)
 		}
+		if time.Now().Before(baiduTransferCooldown) {
+			return nil, fmt.Errorf("百度转存频控冷却中(至 %v),请稍后重试(errno=-70)",
+				baiduTransferCooldown.Format(time.TimeOnly))
+		}
 		link, err = resolveBaiduShareLink(ctx, d, file, args)
+		if err != nil && isBaiduTransferRateLimitErr(err) {
+			baiduTransferCooldown = time.Now().Add(baiduTransferCooldownDuration)
+			log.Warnf("百度转存触发频控,转存兜底冷却 %v", baiduTransferCooldownDuration)
+		}
 	}
 	if err == nil && link != nil {
 		baiduShareLinkCache.Set(key, link)
@@ -408,6 +438,19 @@ func (d *BaiduShare2) transferShare(bd *baidu_netdisk.BaiduNetdisk, dstPath stri
 	if len(ids) == 0 {
 		return nil, nil
 	}
+	// 半初始化自愈(2026-09-27 线上实证):getInfo 开页吃到降级页时 shareid/share_uk 抓空而
+	// Validate 仍成功(列表正常),转存却每发必报 errno=2「参数错误」且无自愈路径——Token 不再
+	// 过期就不会重新 Validate,空 shareid 会粘滞到进程重启。缺参时先重新 Validate 补齐(顺带刷新
+	// sekey),仍缺则透出明确文案,别拿空 shareid 打百度换回模糊报错。
+	if d.ShareId == "" || d.ShareUk == "" {
+		verr := d.Validate()
+		if d.ShareId == "" || d.ShareUk == "" {
+			if verr != nil {
+				return nil, verr
+			}
+			return nil, errors.New("分享页未解析到 shareid/share_uk,请稍后重试")
+		}
+	}
 	Cookie := cookie.SetStr(bd.Cookie, "BDCLND", d.Token)
 	decoded, _ := url.QueryUnescape(d.Token)
 	data := map[string]string{
@@ -443,8 +486,16 @@ func (d *BaiduShare2) transferShare(bd *baidu_netdisk.BaiduNetdisk, dstPath stri
 		log.Debugf("response: %v", res.String())
 	}
 
-	if utils.Json.Get(res.Body(), "errno").ToInt() != 0 {
-		return nil, errors.New(utils.Json.Get(res.Body(), "show_msg").ToString())
+	// 错误文案须带 errno:原始 show_msg(如「参数错误」「转存太快,请稍后再试」)不含错误码,
+	// 线上排障无法从日志区分根因(2026-09-27 实证 231 发「参数错误」查不到 errno)
+	if errno := utils.Json.Get(res.Body(), "errno").ToInt(); errno != 0 {
+		msg := utils.Json.Get(res.Body(), "show_msg").ToString()
+		if msg == "" {
+			msg = fmt.Sprintf("errno=%d", errno)
+		} else {
+			msg = fmt.Sprintf("%s(errno=%d)", msg, errno)
+		}
+		return nil, errors.New(msg)
 	}
 
 	files := []File{}

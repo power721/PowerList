@@ -260,7 +260,7 @@ func InitialSettings() []model.SettingItem {
 		{Key: conf.QuarkTo123, Value: "false", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: conf.UCTo123, Value: "false", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: conf.GuangyaTo123, Value: "false", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
-		{Key: conf.BaiduShareDirect, Value: "false", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
+		{Key: conf.BaiduShareDirect, Value: "true", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: conf.QuarkShareDirect, Value: "true", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: conf.UCShareDirect, Value: "true", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: conf.DriverRoundRobin, Value: "false", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},

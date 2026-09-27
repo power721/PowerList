@@ -46,6 +46,30 @@ var uidRegexp = regexp.MustCompile(`"uid"\s*:\s*"?([0-9]+)"?`)
 // baiduUIDCache 按账号 ID 缓存 uid(签名用),避免每次取链都打 mbd 接口。
 var baiduUIDCache = cache.NewKeyedCache[string](30 * time.Minute)
 
+// baiduDirectSekeyCache 按存储缓存免转存用 BDCLND(sekey)。免转存默认开启后,strm 刮削风暴
+// 若逐链 verify+开页,数百发 verify 会复刻 2026-09-24 的 -62 风控(2026-09-27 亦实证一轮风暴
+// 即可触发账号级 -70);sekey 会话本身以小时计,30 分钟复用足够新鲜,过期由 dlna errno 兜底
+// 失效重取一次(见 resolveShareDirectLink)。
+var baiduDirectSekeyCache = cache.NewKeyedCache[string](30 * time.Minute)
+
+// acquireDlnaSekey 取免转存 sekey:优先命中按存储缓存,未命中用账号 Cookie 开页取新鲜 BDCLND
+// 并回填缓存。返回 (sekey, 是否来自缓存, 错误);取失败由调用方回退 d.Token。
+func acquireDlnaSekey(d *BaiduShare2, accountCookie string) (string, bool, error) {
+	key := fmt.Sprintf("%v", d.ID)
+	if sekey, ok := baiduDirectSekeyCache.Get(key); ok && sekey != "" {
+		return sekey, true, nil
+	}
+	sekey, err := fetchFreshSekey(d, accountCookie)
+	if err != nil {
+		return "", false, err
+	}
+	if sekey == "" {
+		return "", false, errors.New("未能获取分享 BDCLND")
+	}
+	baiduDirectSekeyCache.Set(key, sekey)
+	return sekey, false, nil
+}
+
 func baiduSha1(s string) string {
 	h := sha1.Sum([]byte(s))
 	return hex.EncodeToString(h[:])
@@ -162,12 +186,13 @@ func mergeCookies(base string, cs []*http.Cookie) string {
 	return out
 }
 
-// fetchFreshSekey 每次取链时,用账号 Cookie 开分享页拿新鲜的 BDCLND(sekey)。
+// fetchFreshSekey 用账号 Cookie 开分享页拿新鲜的 BDCLND(sekey)。
 // 关键:必须用账号 Cookie 开页/verify,使 BDCLND 会话与 DLNA 签名所用账号同源
 // (参考 cloud-drive.js: baiduOpenSharePage/baiduVerifySharePassword 均带 accountCookie)。
 // 带提取码先 /share/verify 建立会话,响应 cookie 合并后带入分享页 GET。
 // 返回 BDCLND(URL 编码形态);拿不到返回错误,交由调用方回退 d.Token。
-func (d *BaiduShare2) fetchFreshSekey(accountCookie string) (string, error) {
+// 声明为 var 便于单测替换(同 baiduAccountCookie 模式)。
+var fetchFreshSekey = func(d *BaiduShare2, accountCookie string) (string, error) {
 	hdr := accountCookie
 	if d.Pwd != "" {
 		verifyResp := struct {
@@ -217,11 +242,10 @@ var resolveShareDirectLink = func(d *BaiduShare2, file model.Obj) (*model.Link, 
 			return nil, err
 		}
 	}
-	// sekey 优先每次用账号 Cookie 开分享页取新鲜 BDCLND(防过期/形态不一致/会话不同源);
-	// 失败回退 d.Token(再经 baiduDlnaSekey 归一化)。
-	sekey, serr := d.fetchFreshSekey(bd.Cookie)
-	sekeyFresh := serr == nil && sekey != ""
-	if !sekeyFresh {
+	// sekey 优先复用按存储缓存(免转存默认开后,刮削风暴逐链 verify+开页会复刻 -62 风控),
+	// 未命中才用账号 Cookie 开分享页取新鲜 BDCLND;取失败回退 d.Token(再经 baiduDlnaSekey 归一化)。
+	sekey, fromCache, serr := acquireDlnaSekey(d, bd.Cookie)
+	if serr != nil {
 		log.Warnf("获取新鲜 BDCLND 失败,回退 d.Token: %v", serr)
 		sekey = d.Token
 	}
@@ -232,60 +256,70 @@ var resolveShareDirectLink = func(d *BaiduShare2, file model.Obj) (*model.Link, 
 	t := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	rand := baiduDlnaRand(bduss, uid, t)
 
-	// DLNA 请求带「账号 Cookie + BDCLND(sekey)」,与签名账号同源(参考 JS baiduDlnaHeaders 用合并 cookie)。
-	dlnaCookie := cookie.SetStr(bd.Cookie, "BDCLND", sekey)
-	res, err := d.client.R().
-		SetHeader("User-Agent", DLNAUA).
-		SetHeader("Accept", "application/json, text/plain, */*").
-		SetHeader("Cookie", dlnaCookie).
-		SetQueryParams(map[string]string{
-			"shareid":    d.ShareId,
-			"uk":         d.ShareUk,
-			"fid":        file.GetID(),
-			"sekey":      baiduDlnaSekey(sekey),
-			"origin":     "dlna",
-			"devuid":     baiduDevUID,
-			"clienttype": "1",
-			"channel":    baiduChannel,
-			"version":    baiduVersion,
-			"time":       t,
-			"rand":       rand,
-		}).
-		Get("/share/list")
-	if err != nil {
-		return nil, fmt.Errorf("百度原画(无限) share/list 请求失败: %w", err)
-	}
-	body := res.Body()
-	errno := utils.Json.Get(body, "errno").ToInt()
-	if errno == 0 {
-		errno = utils.Json.Get(body, "error_code").ToInt()
-	}
-	if errno != 0 {
-		msg := utils.Json.Get(body, "show_msg").ToString()
-		if msg == "" {
-			msg = utils.Json.Get(body, "errmsg").ToString()
+	for attempt := 0; ; attempt++ {
+		// DLNA 请求带「账号 Cookie + BDCLND(sekey)」,与签名账号同源(参考 JS baiduDlnaHeaders 用合并 cookie)。
+		dlnaCookie := cookie.SetStr(bd.Cookie, "BDCLND", sekey)
+		res, err := d.client.R().
+			SetHeader("User-Agent", DLNAUA).
+			SetHeader("Accept", "application/json, text/plain, */*").
+			SetHeader("Cookie", dlnaCookie).
+			SetQueryParams(map[string]string{
+				"shareid":    d.ShareId,
+				"uk":         d.ShareUk,
+				"fid":        file.GetID(),
+				"sekey":      baiduDlnaSekey(sekey),
+				"origin":     "dlna",
+				"devuid":     baiduDevUID,
+				"clienttype": "1",
+				"channel":    baiduChannel,
+				"version":    baiduVersion,
+				"time":       t,
+				"rand":       rand,
+			}).
+			Get("/share/list")
+		if err != nil {
+			return nil, fmt.Errorf("百度原画(无限) share/list 请求失败: %w", err)
 		}
-		if msg == "" {
-			msg = utils.Json.Get(body, "error_msg").ToString()
+		body := res.Body()
+		errno := utils.Json.Get(body, "errno").ToInt()
+		if errno == 0 {
+			errno = utils.Json.Get(body, "error_code").ToInt()
 		}
-		if msg == "" {
-			msg = strconv.Itoa(errno)
+		if errno != 0 {
+			// 缓存 sekey 疑似过期:失效重取一次再试,别让整轮刮削风暴跌回转存路径
+			if fromCache && attempt == 0 {
+				baiduDirectSekeyCache.Delete(fmt.Sprintf("%v", d.ID))
+				if s2, _, serr2 := acquireDlnaSekey(d, bd.Cookie); serr2 == nil {
+					sekey, fromCache = s2, false
+					continue
+				}
+			}
+			msg := utils.Json.Get(body, "show_msg").ToString()
+			if msg == "" {
+				msg = utils.Json.Get(body, "errmsg").ToString()
+			}
+			if msg == "" {
+				msg = utils.Json.Get(body, "error_msg").ToString()
+			}
+			if msg == "" {
+				msg = strconv.Itoa(errno)
+			}
+			return nil, fmt.Errorf("百度原画(无限) 请求失败: %s (errno=%d sekey: cache=%v len=%d encoded=%v)",
+				msg, errno, fromCache, len(sekey), strings.Contains(sekey, "%"))
 		}
-		return nil, fmt.Errorf("百度原画(无限) 请求失败: %s (errno=%d sekey: fresh=%v len=%d encoded=%v)",
-			msg, errno, sekeyFresh, len(sekey), strings.Contains(sekey, "%"))
+		dlink := pickDlink(body)
+		if dlink == "" {
+			return nil, errors.New("百度原画(无限) 未返回直链")
+		}
+		finalURL := followDlnaRedirect(dlink)
+		if finalURL == "" {
+			finalURL = dlink
+		}
+		// UA 由 alist-tvbox 对 BAIDU 直接下发 DLNA UA;后端代理则由 link.Header 生效。URL 无需内嵌标记。
+		log.Infof("[%v] 百度免转存直链 %v %v %v", bd.ID, file.GetName(), file.GetID(), file.GetSize())
+		return &model.Link{
+			URL:    finalURL,
+			Header: http.Header{"User-Agent": []string{DLNAUA}},
+		}, nil
 	}
-	dlink := pickDlink(body)
-	if dlink == "" {
-		return nil, errors.New("百度原画(无限) 未返回直链")
-	}
-	finalURL := followDlnaRedirect(dlink)
-	if finalURL == "" {
-		finalURL = dlink
-	}
-	// UA 由 alist-tvbox 对 BAIDU 直接下发 DLNA UA;后端代理则由 link.Header 生效。URL 无需内嵌标记。
-	log.Infof("[%v] 百度免转存直链 %v %v %v", bd.ID, file.GetName(), file.GetID(), file.GetSize())
-	return &model.Link{
-		URL:    finalURL,
-		Header: http.Header{"User-Agent": []string{DLNAUA}},
-	}, nil
 }
