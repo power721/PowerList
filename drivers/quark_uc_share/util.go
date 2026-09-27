@@ -18,8 +18,8 @@ import (
 	quark "github.com/OpenListTeam/OpenList/v4/drivers/quark_uc"
 	"github.com/OpenListTeam/OpenList/v4/drivers/quark_uc_tv"
 	"github.com/OpenListTeam/OpenList/v4/internal/cache"
-	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
@@ -767,6 +767,10 @@ func (d *QuarkUCShare) saveAndLink(ctx context.Context, binding shareRequestBind
 		}
 		log.Debugf("[saveAndLink] 账号 %d fid=%s 取链 耗时=%v", binding.accountID(), file.GetID(), time.Since(linkStart))
 		if err == nil {
+			if e := d.rejectUCPlaceholder(ctx, link, file.GetSize()); e != nil {
+				log.Warnf("[uc-placeholder] [%v] 账号 %d 直链为会员占位视频,拒绝返回 %v", binding.accountLabel(d), binding.accountID(), file.GetName())
+				return nil, e
+			}
 			return link, nil
 		}
 		lastErr = err
@@ -785,6 +789,63 @@ func (d *QuarkUCShare) saveAndLink(ctx context.Context, binding shareRequestBind
 // 再带进 file/download 拿 dl-c 提速通道直链(实测 ~14MB/s vs 普通 ~1.7MB/s)。
 // 链路: batch_send(文件名+转存fid) → store_msg_id → acquire_dl_token → data.token。
 const speedupConversation = "300000003429402383"
+
+// errUCPlaceholderLink:UC 非会员账号转存后取 4K/高清晰度视频直链,checkplay 会把
+// dl-pc 直链换成「请使用UC浏览器播放或开通UC网盘会员」占位 MP4(HTTP 200/206"成功"
+// 返回,播放器无从分辨)。识别为占位时以明确错误透出,触发上层兜底/报清晰错误,
+// 而不是把占位视频当真链静默返回。
+var errUCPlaceholderLink = errors.New("UC 返回会员占位视频:非会员账号的 4K/高清晰度直链被风控,免转存直链亦不可用")
+
+// probeLinkIsPlaceholder 用 Range: bytes=0-0 探测直链真实总长(Content-Range 的 total),
+// 与文件实际大小不符 => 占位链接(2026-09-27 实测:870,963,162 字节真文件回
+// 15,340,287 字节占位)。转码流(.m3u8 / ContentLength>0)与原文件大小天然不同,不探测;
+// 探测不出总长(403/网络错误/缺头)不判占位——宁可用占位也不错杀真链。
+// 声明为 var 便于单测替换。
+var probeLinkIsPlaceholder = func(ctx context.Context, link *model.Link, expectSize int64) bool {
+	if link == nil || link.URL == "" || expectSize <= 0 {
+		return false
+	}
+	u := link.URL
+	// 剥 #storageId / #x-referer=raw 片段标记,片段不会发往 CDN。
+	if i := strings.Index(u, "#"); i >= 0 {
+		u = u[:i]
+	}
+	if strings.Contains(u, ".m3u8") || link.ContentLength > 0 {
+		return false
+	}
+	req := base.RestyClient.R().SetContext(ctx)
+	req.SetHeader("Range", "bytes=0-0")
+	for k, vs := range link.Header {
+		for _, v := range vs {
+			req.SetHeader(k, v)
+		}
+	}
+	resp, err := req.Get(u)
+	if err != nil {
+		return false
+	}
+	cr := resp.Header().Get("Content-Range") // 形如 "bytes 0-0/<total>"
+	i := strings.LastIndex(cr, "/")
+	if i < 0 {
+		return false
+	}
+	total, err := strconv.ParseInt(strings.TrimSpace(cr[i+1:]), 10, 64)
+	if err != nil || total <= 0 {
+		return false
+	}
+	return total != expectSize
+}
+
+// rejectUCPlaceholder UC 转存直链出链前的占位视频闸门,非 UC 或探测为真链时放行。
+func (d *QuarkUCShare) rejectUCPlaceholder(ctx context.Context, link *model.Link, expectSize int64) error {
+	if d.getDriverName() != "UC" || link == nil {
+		return nil
+	}
+	if probeLinkIsPlaceholder(ctx, link, expectSize) {
+		return errUCPlaceholderLink
+	}
+	return nil
+}
 
 type speedupEntry struct {
 	token  string
@@ -965,6 +1026,11 @@ var speedupDownload = func(d *QuarkUCShare, cookie, savedFid, token string) (str
 
 // speedupLink 带提速 token 取直链;任何一步失败回退 binding.link 的普通直链。
 func (d *QuarkUCShare) speedupLink(ctx context.Context, rb requestBinding, savedFile model.Obj, args model.LinkArgs) (*model.Link, error) {
+	// 提速走夸克聊天会话(drive-social-api.quark.cn),UC Cookie 在夸克侧无账号,恒 401
+	// "require login [guest]"(2026-09-27 线上日志实证),UC 直接普通直链,省一次必败请求。
+	if d.getDriverName() == "UC" {
+		return rb.link(ctx, savedFile, args)
+	}
 	// dl-c 提速是非会员通道:非会员的普通直链(dl-pc)被限速 ~1MB/s,speedup 换 dl-c(~14MB/s);
 	// SVIP 的普通直链本就不限速,speedup 对其只回 dl-pc,故跳过省一次聊天会话消息(对齐 my.jar r(isSvip))。
 	if rb.requestDriver != nil && rb.requestDriver.VIP {

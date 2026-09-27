@@ -2,7 +2,6 @@ package quark_uc_share
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -107,6 +106,21 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 		return link, nil
 	}
 
+	// 取链优先级(夸克与 UC 同逻辑):免转存 → 多账号分片 → 单账号串行转存,每级只试一次。
+	// 免转存最优先(2026-09-27 实测):分享直链单连接 ~44MB/s、多连接 ~85MB/s,远超转存
+	// speedup 通道(~14MB/s/账号);零转存延迟、不占账号空间;UC 侧还不受非 VIP 4K
+	// 「请使用UC浏览器播放或开通UC网盘会员」占位视频风控(checkplay 把转存账号的 dl-pc
+	// 直链换成 ~15MB 占位 MP4,HTTP 206"成功"返回,870MB 真文件实测)。免转存失败才走
+	// 转存路径;后续各级失败不再回头重试免转存——顶层刚失败过,重复请求无增益。
+	if shareDirectEnabled(d) {
+		link, err := resolveShareDirectLink(d, file)
+		if err == nil && link != nil {
+			quarkUCShareLinkCache.Set(key, link)
+			return link, nil
+		}
+		log.Warnf("[%v] 免转存取链失败,回退多账号转存路径: %v", d.getDriverName(), err)
+	}
+
 	// 多账号分片并行下载(开关开):直接对所有网盘账号 goroutine 并发取链,
 	// 跳过串行的 resolveQuarkUCShareLink(它失败才换下一个账号,慢;且会让主链账号被重复取)。
 	// 首个账号成功后只额外等 2s 收集更多源,不等最慢账号,启播≈首源+2s。
@@ -124,28 +138,15 @@ func (d *QuarkUCShare) Link(ctx context.Context, file model.Obj, args model.Link
 			return link, nil
 		}
 		if eligible {
-			// 全部账号取链失败,回退免转存兜底(免转存开关关时跳过)。
-			if !shareDirectEnabled(d) {
-				return nil, errors.New("[multi-source] 全部账号取链失败且免转存已关闭")
-			}
-			log.Warnf("[multi-source] 全部账号取链失败,回退免转存")
-			link, err := resolveShareDirectLink(d, file)
-			if err == nil && link != nil {
-				quarkUCShareLinkCache.Set(key, link)
-			}
-			return link, err
+			// 全部账号取链失败:落下方串行转存兜底——link() 含 TV 账号路径,可能再救一次;
+			// 不再回退免转存,顶层刚试过(重复请求无增益)。
+			log.Warnf("[multi-source] 全部账号取链失败,回退串行转存路径")
 		}
-		// eligible=false(账号数不足):走下方单账号串行转存路径。
+		// eligible=false(账号数不足):多账号不适用,直接走串行转存。
 	}
 
-	// 开关关 / 账号数不足:转存 + speedup 为主(串行轮询账号,失败换下一个),免转存兜底(免转存开关开时)。
-	var link *model.Link
-	var err error
-	link, err = resolveQuarkUCShareLink(ctx, d, file, args)
-	if (err != nil || link == nil) && shareDirectEnabled(d) {
-		log.Warnf("转存取链失败,回退免转存: %v", err)
-		link, err = resolveShareDirectLink(d, file)
-	}
+	// 兜底:转存 + speedup(串行轮询账号,失败换下一个;link() 内含 TV 账号路径)。
+	link, err := resolveQuarkUCShareLink(ctx, d, file, args)
 	if err == nil && link != nil {
 		quarkUCShareLinkCache.Set(key, link)
 	}

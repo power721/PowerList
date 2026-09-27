@@ -38,6 +38,7 @@ func TestQuarkUCShareLink_CachesByFileID(t *testing.T) {
 	origSVIP := accountIsSVIP
 	origMS := multiSourceEnabled
 	origCollect := collectMultiAccountLinks
+	origSD := shareDirectEnabled
 	quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 	resolveCalls := 0
 	resolveQuarkUCShareLink = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -48,6 +49,8 @@ func TestQuarkUCShareLink_CachesByFileID(t *testing.T) {
 	resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link, error) {
 		return nil, errors.New("share-direct stub disabled") // 置失败,流程落到 resolveQuarkUCShareLink
 	}
+	// 免转存现已先于串行转存被评估,置关保持本用例只测转存链缓存(读 setting 会死锁)
+	shareDirectEnabled = func(d *QuarkUCShare) bool { return false }
 	multiSourceEnabled = func(d *QuarkUCShare) bool { return false }
 	collectMultiAccountLinks = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) ([]*model.Link, bool) {
 		return nil, false
@@ -59,6 +62,7 @@ func TestQuarkUCShareLink_CachesByFileID(t *testing.T) {
 		accountIsSVIP = origSVIP
 		multiSourceEnabled = origMS
 		collectMultiAccountLinks = origCollect
+		shareDirectEnabled = origSD
 	})
 
 	d := &QuarkUCShare{Addition: Addition{ShareToken: "share-token"}, config: driver.Config{Name: "QuarkShare"}}
@@ -151,8 +155,9 @@ func TestQuarkUCShareLink_DifferentFileIDsDoNotShareCache(t *testing.T) {
 	}
 }
 
+// 免转存优先于串行转存(2026-09-27 起的取链优先级:多账号 → 免转存 → 串行转存):
+// 免转存成功时不再走转存(零转存延迟,且 UC 侧不受非会员 4K 占位视频风控)。
 func TestQuarkUCShareLink_FallbackToShareDirectOnSaveFail(t *testing.T) {
-	// 转存(save+speedup)为主;转存失败时回退免转存(share-direct)。
 	stubMultiSourceDisabled(t)
 	origCache := quarkUCShareLinkCache
 	origResolver := resolveQuarkUCShareLink
@@ -181,14 +186,14 @@ func TestQuarkUCShareLink_FallbackToShareDirectOnSaveFail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("link: %v", err)
 	}
-	if link == nil || link.URL == "" {
-		t.Fatalf("expected non-empty link")
-	}
-	if resolveCalls != 1 {
-		t.Fatalf("expected save attempted once, got %d", resolveCalls)
+	if link == nil || link.URL != "https://example.com/share-direct/"+file.GetID() {
+		t.Fatalf("expected share-direct link first, got %+v", link)
 	}
 	if directCalls != 1 {
-		t.Fatalf("expected share-direct fallback once, got %d", directCalls)
+		t.Fatalf("expected share-direct attempted once, got %d", directCalls)
+	}
+	if resolveCalls != 0 {
+		t.Fatalf("免转存成功时不应再走转存, got %d", resolveCalls)
 	}
 }
 
@@ -234,8 +239,8 @@ func TestQuarkUCShareLink_ShareDirectDisabledSkipsDirect(t *testing.T) {
 	}
 }
 
+// 免转存失败时回退转存(save+speedup),转存链照常返回。
 func TestQuarkUCShareLink_PrefersSaveAndSpeedup(t *testing.T) {
-	// 转存(save+speedup)为主:成功时不调用免转存(免转存无 speedup,被限速,仅兜底)。
 	stubMultiSourceDisabled(t)
 	origCache := quarkUCShareLinkCache
 	origResolver := resolveQuarkUCShareLink
@@ -249,7 +254,7 @@ func TestQuarkUCShareLink_PrefersSaveAndSpeedup(t *testing.T) {
 	}
 	resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link, error) {
 		directCalls++
-		return nil, errors.New("share-direct should not be called")
+		return nil, errors.New("share-direct failed")
 	}
 	t.Cleanup(func() {
 		quarkUCShareLinkCache = origCache
@@ -264,14 +269,14 @@ func TestQuarkUCShareLink_PrefersSaveAndSpeedup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("link: %v", err)
 	}
-	if link == nil || link.URL == "" {
-		t.Fatalf("expected non-empty link")
+	if link == nil || link.URL != "https://example.com/saved/"+file.GetID() {
+		t.Fatalf("expected save link when share-direct fails, got %+v", link)
+	}
+	if directCalls != 1 {
+		t.Fatalf("expected share-direct attempted once first, got %d", directCalls)
 	}
 	if resolveCalls != 1 {
 		t.Fatalf("expected save+speedup once, got %d", resolveCalls)
-	}
-	if directCalls != 0 {
-		t.Fatalf("expected share-direct not called when save+speedup succeeds, got %d", directCalls)
 	}
 }
 
@@ -327,13 +332,16 @@ func TestQuarkUCShareLink_PopulatesMultiSourceWhenEnabled(t *testing.T) {
 	}
 }
 
-// 开关开但网盘账号数不足(collect 返回 eligible=false)时,Link() 必须回落单账号串行
-// 转存路径,而不是把「不适用」误判为「全部账号取链失败」静默跌到免转存直链
-// (免转存直链短寿命且强校验 Cookie 归属,单账号用户开着开关会完全无法播放)。
+// 开关开但网盘账号数不足(collect 返回 eligible=false)时,多账号不适用,
+// 按优先级落免转存(免转存成功即返回,不再走串行转存);
+// 免转存也失败才会到串行转存(由 placeholder_test.go 的矩阵覆盖)。
 func TestQuarkUCShareLink_IneligibleFallsBackToSerialNotShareDirect(t *testing.T) {
 	origCache := quarkUCShareLinkCache
 	origResolver := resolveQuarkUCShareLink
 	origDirect := resolveShareDirectLink
+	origMS := multiSourceEnabled
+	origCollect := collectMultiAccountLinks
+	origSD := shareDirectEnabled
 	quarkUCShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 	resolveCalls := 0
 	directCalls := 0
@@ -349,10 +357,14 @@ func TestQuarkUCShareLink_IneligibleFallsBackToSerialNotShareDirect(t *testing.T
 	collectMultiAccountLinks = func(ctx context.Context, d *QuarkUCShare, file model.Obj, args model.LinkArgs) ([]*model.Link, bool) {
 		return nil, false // 单账号:不适用多账号路径
 	}
+	shareDirectEnabled = func(d *QuarkUCShare) bool { return true }
 	t.Cleanup(func() {
 		quarkUCShareLinkCache = origCache
 		resolveQuarkUCShareLink = origResolver
 		resolveShareDirectLink = origDirect
+		multiSourceEnabled = origMS
+		collectMultiAccountLinks = origCollect
+		shareDirectEnabled = origSD
 	})
 
 	d := &QuarkUCShare{Addition: Addition{ShareToken: "share-token"}, config: driver.Config{Name: "QuarkShare"}}
@@ -362,14 +374,14 @@ func TestQuarkUCShareLink_IneligibleFallsBackToSerialNotShareDirect(t *testing.T
 	if err != nil {
 		t.Fatalf("link: %v", err)
 	}
-	if link == nil || link.URL != "https://cdn.example.com/serial-save/fid" {
-		t.Fatalf("expected serial save link, got %+v", link)
+	if link == nil || link.URL != "https://cdn.example.com/share-direct/"+file.GetID() {
+		t.Fatalf("expected share-direct link, got %+v", link)
 	}
-	if resolveCalls != 1 {
-		t.Fatalf("expected serial resolve attempted once, got %d", resolveCalls)
+	if directCalls != 1 {
+		t.Fatalf("expected share-direct attempted once, got %d", directCalls)
 	}
-	if directCalls != 0 {
-		t.Fatalf("share-direct must not be attempted when ineligible, got %d", directCalls)
+	if resolveCalls != 0 {
+		t.Fatalf("免转存成功时不应走串行转存, got %d", resolveCalls)
 	}
 }
 
