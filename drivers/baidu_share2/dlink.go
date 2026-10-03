@@ -237,10 +237,15 @@ var resolveShareDirectLink = func(d *BaiduShare2, file model.Obj) (*model.Link, 
 	if bduss == "" {
 		return nil, errors.New("百度 Cookie 缺少 BDUSS,免转存不可用")
 	}
-	if d.ShareId == "" || d.ShareUk == "" || d.Token == "" {
+	if d.Token == "" {
 		if err := d.Validate(); err != nil {
 			return nil, err
 		}
+	}
+	// 空 shareid 打 DLNA /share/list 只会换回误导性的 errno=-7「啊哦，链接出错了」
+	// (2026-10-02 线上实证),守在这里,与转存路径同款自愈+带页面标题的明确文案。
+	if err := d.ensureShareIds(); err != nil {
+		return nil, err
 	}
 	// sekey 优先复用按存储缓存(免转存默认开后,刮削风暴逐链 verify+开页会复刻 -62 风控),
 	// 未命中才用账号 Cookie 开分享页取新鲜 BDCLND;取失败回退 d.Token(再经 baiduDlnaSekey 归一化)。

@@ -123,6 +123,10 @@ type BaiduShare2 struct {
 	ShareId string
 	ShareUk string
 	Token   string
+
+	// pageTitle 记录 getInfo 最后一次开页的 <title>,供降级页守卫文案携带:
+	// 安全验证=风控 / 请输入提取码=提取码态异常 / 正常标题但无 shareid=页面改版。
+	pageTitle string
 }
 
 func (d *BaiduShare2) Config() driver.Config {
@@ -134,9 +138,12 @@ func (d *BaiduShare2) GetAddition() driver.Additional {
 }
 
 func (d *BaiduShare2) Init(ctx context.Context) error {
+	// UA 分工(对齐 my.jar 复刻与 web 前端语义):verify/分享页/share list 是 web 端点,默认
+	// 浏览器 UA——netdisk UA 开 HTML 页指纹反常,易落风控桶(2026-10-02/03 实证);转存/DLNA
+	// 等客户端端点在各自请求上显式覆盖 netdisk/DLNA UA。
 	d.client = resty.New().
 		SetBaseURL("https://pan.baidu.com").
-		SetHeader("User-Agent", "netdisk").
+		SetHeader("User-Agent", baiduWebUA).
 		SetHeader("Referer", "https://pan.baidu.com")
 
 	if conf.LazyLoad && !conf.StoragesLoaded {
@@ -208,50 +215,103 @@ func (d *BaiduShare2) Validate() error {
 	return d.getInfo()
 }
 
+// baiduDegradedPageRetryDelay 无 shareid 降级页的重开间隔:对齐 verify 对 -62 的 2s 退避
+// 先例,降级页多为瞬时风控/边缘缓存。声明为 var 便于单测提速。
+var baiduDegradedPageRetryDelay = 2 * time.Second
+
+var baiduTitleRe = regexp.MustCompile(`<title>\s*([^<]*)</title>`)
+
+func baiduPageTitle(page string) string {
+	if m := baiduTitleRe.FindStringSubmatch(page); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// shareDeadTitle 死链页 title 分界:死链 HTTP 仍 200 且 errno 三形态同码,HTML title 是唯一
+// 可靠分界(线上实证死链 title「百度网盘-链接不存在」);文案命中 alist-tvbox 的死链与清理
+// 关键字,让真死链当场判死。非死链返回空串。
+func shareDeadTitle(title string) string {
+	if strings.Contains(title, "不存在") || strings.Contains(title, "取消") ||
+		strings.Contains(title, "删除") || strings.Contains(title, "过期") || strings.Contains(title, "违规") {
+		return fmt.Sprintf("分享不存在或已失效: %s", title)
+	}
+	return ""
+}
+
+// openSharePage 开一次分享页:ua 为空用 client 默认(web),响应 Set-Cookie 的 BDCLND
+// 回填 d.Token(sekey 轮换)。
+func (d *BaiduShare2) openSharePage(api, hdr, ua string) (string, error) {
+	req := d.client.R().SetHeader("Cookie", hdr)
+	if ua != "" {
+		req = req.SetHeader("User-Agent", ua)
+	}
+	res, err := req.Get(api)
+	if err != nil {
+		return "", err
+	}
+	if BDCLND := cookie.GetCookie(res.Cookies(), "BDCLND"); BDCLND != nil {
+		d.Token = BDCLND.Value
+	}
+	return res.String(), nil
+}
+
 func (d *BaiduShare2) getInfo() error {
 	api := "/s/" + d.Surl
-	// 带账号 Cookie 开页,对齐 verify 的防风控做法:裸 netdisk UA 高频开页易吃到无 shareid 的
-	// 降级页(2026-09-27 线上实证:重启后 strm 风暴集中重验证,126 个分享连吃无 shareid 降级页,
-	// 转存全数 errno=2「参数错误」且无自愈路径)
-	res, err := d.client.R().
-		SetHeader("Cookie", baiduAccountCookie()).
-		Get(api)
+	// 开页带账号 Cookie 但绝不带 BDCLND(2026-10-02 线上实证回归:带 BDCLND 落到的分享
+	// 文件页是 JS 壳,shareid 只作为字段名字符串出现、无任何值,数据靠浏览器 XHR 拉取;
+	// 匿名开到的输码页/分享页才嵌有 shareid 值,两种形态:JSON 裸数字 "shareid":123 与
+	// JS 字面量 shareid:"123")。降级页(风控墙等,无 shareid)由 web UA 重开兜底。
+	hdr := baiduAccountCookie()
+	page, err := d.openSharePage(api, hdr, "")
 	if err != nil {
 		return err
 	}
-	BDCLND := cookie.GetCookie(res.Cookies(), "BDCLND")
-	if BDCLND != nil {
-		d.Token = BDCLND.Value
+	title := baiduPageTitle(page)
+	if msg := shareDeadTitle(title); msg != "" {
+		return errors.New(msg)
 	}
-
-	// 错误页检测:死链 HTTP 仍 200,靠 <title> 区分(线上实证死链 title「百度网盘-链接不存在」,
-	// 带码活链 302 到输码页 title「百度网盘 请输入提取码」且页面含 shareid)。errno=-9 无法区分
-	// 提取码错误/链接不存在/sekey 过期(三种页面形态同码),开页阶段的 HTML 是唯一可靠死活分界;
-	// 文案含「分享不存在/已失效」命中 alist-tvbox 的死链与清理关键字,让真死链当场判死。
-	if m := regexp.MustCompile(`<title>\s*([^<]*)</title>`).FindStringSubmatch(res.String()); m != nil {
-		if t := m[1]; strings.Contains(t, "不存在") || strings.Contains(t, "取消") ||
-			strings.Contains(t, "删除") || strings.Contains(t, "过期") || strings.Contains(t, "违规") {
-			return fmt.Errorf("分享不存在或已失效: %s", t)
+	// 兼容 quoted/Unquoted 两种嵌法;文件壳页里的字段名列表(如 "share_uk","shareid"])
+	// 后随 ']' 不匹配 [:=],不会误命中
+	reID := regexp.MustCompile(`shareid"?\s*[:=]\s*"?(\d+)`)
+	reUK := regexp.MustCompile(`share_uk"?\s*[:=]\s*"?(\d+)`)
+	shareID, shareUk := "", ""
+	if m := reID.FindStringSubmatch(page); len(m) >= 2 {
+		shareID = m[1]
+	}
+	if m := reUK.FindStringSubmatch(page); len(m) >= 2 {
+		shareUk = m[1]
+	}
+	if shareID == "" || shareUk == "" {
+		// 降级页多为瞬时的边缘缓存/风控:隔 2s 二次开页(显式 web UA,同 client 默认),
+		// 别让半初始化态粘滞;取链期的真正兜底是 List 收割(见 List),此处仅 Init 期第一击
+		time.Sleep(baiduDegradedPageRetryDelay)
+		if page2, err2 := d.openSharePage(api, hdr, baiduWebUA); err2 == nil {
+			title = baiduPageTitle(page2)
+			if msg := shareDeadTitle(title); msg != "" {
+				return errors.New(msg)
+			}
+			if m := reID.FindStringSubmatch(page2); len(m) >= 2 && shareID == "" {
+				shareID = m[1]
+			}
+			if m := reUK.FindStringSubmatch(page2); len(m) >= 2 && shareUk == "" {
+				shareUk = m[1]
+			}
 		}
 	}
-
-	re := regexp.MustCompile(`shareid:\s*"(\d+)"`)
-	matches := re.FindStringSubmatch(res.String())
-	if len(matches) >= 2 {
-		d.ShareId = matches[1]
+	d.pageTitle = title
+	if shareID != "" {
+		d.ShareId = shareID
 		log.Debugf("Share ID: %v", d.ShareId)
 	} else {
-		// 须带存储上下文:匿名告警在数百个聚合分享里无法定位是哪个挂载吃了降级页
-		log.Warnf("[%v] shareid not found on /s/%v (degraded page?)", d.ID, d.Surl)
+		// 须带存储上下文与页面标题:匿名告警在数百个聚合分享里无法定位是哪个挂载、撞的哪堵墙
+		log.Warnf("[%v] shareid not found on /s/%v (degraded page? title=%q)", d.ID, d.Surl, d.pageTitle)
 	}
-
-	re = regexp.MustCompile(`share_uk:\s*"(\d+)"`)
-	matches = re.FindStringSubmatch(res.String())
-	if len(matches) >= 2 {
-		d.ShareUk = matches[1]
+	if shareUk != "" {
+		d.ShareUk = shareUk
 		log.Debugf("Share UK: %v", d.ShareUk)
 	} else {
-		log.Warnf("[%v] share_uk not found on /s/%v (degraded page?)", d.ID, d.Surl)
+		log.Warnf("[%v] share_uk not found on /s/%v (degraded page? title=%q)", d.ID, d.Surl, d.pageTitle)
 	}
 
 	log.Debugf("Share Token: %v", d.Token)
@@ -321,6 +381,21 @@ func (d *BaiduShare2) List(ctx context.Context, dir model.Obj, args model.ListAr
 		if err == nil {
 			if res.IsSuccess() && respJson.Errno == 0 {
 				page++
+				// 收割 share_id/uk(2026-10-03 实测/my.jar 复刻):/share/list 响应顶层即带这对值,
+				// 与 HTML 嵌值逐位一致;播放必经目录浏览,收割后取链时 ShareId 必然已就位——降级页/
+				// 模板改版/风控墙不再影响取链,HTML 解析(getInfo)降级为 Init 期第一击。
+				if d.ShareId == "" {
+					if sid := utils.Json.Get(res.Body(), "share_id").ToString(); sid != "" {
+						d.ShareId = sid
+						log.Debugf("Share ID harvested from /share/list: %v", d.ShareId)
+					}
+				}
+				if d.ShareUk == "" {
+					if uk := utils.Json.Get(res.Body(), "uk").ToString(); uk != "" {
+						d.ShareUk = uk
+						log.Debugf("Share UK harvested from /share/list: %v", d.ShareUk)
+					}
+				}
 				for _, v := range respJson.List {
 					size, _ := v.Size.Int64()
 					mtime, _ := v.Mtime.Int64()
@@ -432,27 +507,52 @@ func (d *BaiduShare2) saveFile(fid string, bd *baidu_netdisk.BaiduNetdisk) (mode
 	return files[0], nil
 }
 
+// ensureShareIds 半初始化自愈(2026-09-27 线上实证):getInfo 开页吃到降级页时 shareid/share_uk
+// 抓空而 Validate 仍成功(列表正常),转存却每发必报 errno=2「参数错误」且无自愈路径——Token
+// 不再过期就不会重新 Validate,空 shareid 会粘滞到进程重启。缺参时先重新 Validate 补齐(顺带
+// 刷新 sekey),仍缺则透出带页面标题的明确文案(标题即现场分界:安全验证=风控 / 请输入提取码=
+// 提取码态异常 / 正常标题但无 shareid=页面改版),别拿空 shareid 打百度换回模糊报错。
+func (d *BaiduShare2) ensureShareIds() error {
+	if d.ShareId != "" && d.ShareUk != "" {
+		return nil
+	}
+	verr := d.Validate()
+	if d.ShareId == "" || d.ShareUk == "" {
+		if verr != nil {
+			return verr
+		}
+		title := d.pageTitle
+		if title == "" {
+			title = "无<title>"
+		}
+		return fmt.Errorf("分享页未解析到 shareid/share_uk(页面标题:%s),请稍后重试", title)
+	}
+	return nil
+}
+
 // transferShare 调 /share/transfer 把分享对象(fs_id 列表)批量转存到目标账号的指定目录,
 // 返回新建对象(fs_id 与落盘路径)。目标目录须已存在(官方接口语义);目录对象由网盘侧整棵递归转存。
 func (d *BaiduShare2) transferShare(bd *baidu_netdisk.BaiduNetdisk, dstPath string, ids []string) ([]File, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	// 半初始化自愈(2026-09-27 线上实证):getInfo 开页吃到降级页时 shareid/share_uk 抓空而
-	// Validate 仍成功(列表正常),转存却每发必报 errno=2「参数错误」且无自愈路径——Token 不再
-	// 过期就不会重新 Validate,空 shareid 会粘滞到进程重启。缺参时先重新 Validate 补齐(顺带刷新
-	// sekey),仍缺则透出明确文案,别拿空 shareid 打百度换回模糊报错。
-	if d.ShareId == "" || d.ShareUk == "" {
-		verr := d.Validate()
-		if d.ShareId == "" || d.ShareUk == "" {
-			if verr != nil {
-				return nil, verr
-			}
-			return nil, errors.New("分享页未解析到 shareid/share_uk,请稍后重试")
-		}
+	// 半初始化守卫:空 shareid 打 /share/transfer 只会换回 errno=2「参数错误」(见 ensureShareIds)
+	if err := d.ensureShareIds(); err != nil {
+		return nil, err
 	}
 	Cookie := cookie.SetStr(bd.Cookie, "BDCLND", d.Token)
-	decoded, _ := url.QueryUnescape(d.Token)
+	// sekey 归一化(baiduDlnaSekey 的反方向:查询参数路径要「原始形态」):带提取码分享的
+	// Token 是 verify 返回的原始 base64 randsk(字符集 [A-Za-z0-9+/=],含字面 '+'、不含 '%'),
+	// 无提取码分享取自 BDCLND cookie(已 URL 编码,含 %)。SetQueryParams 会对值再编码一次,
+	// 故前者原样上链、后者先解码一次;绝不能无条件 QueryUnescape——它把 randsk 里的字面 '+'
+	// 当空格吃掉破坏 base64,该分享转存全数 errno=2「参数错误」且无自愈(2026-10-02 红色用例
+	// 坐实:ABC+DEF 上链后服务端收到 ABC DEF;约 3/4 的 randsk 抽签含 '+')。
+	sekey := d.Token
+	if strings.Contains(sekey, "%") {
+		if decoded, derr := url.QueryUnescape(sekey); derr == nil {
+			sekey = decoded
+		}
+	}
 	data := map[string]string{
 		"fsidlist": "[" + strings.Join(ids, ",") + "]",
 		"path":     dstPath,
@@ -466,7 +566,7 @@ func (d *BaiduShare2) transferShare(bd *baidu_netdisk.BaiduNetdisk, dstPath stri
 		"ondup":      "newcopy",
 		"shareid":    d.ShareId,
 		"from":       d.ShareUk,
-		"sekey":      decoded,
+		"sekey":      sekey,
 	}
 
 	res, err := d.client.R().

@@ -267,6 +267,34 @@ func TestBaiduShare2SaveTo(t *testing.T) {
 	}
 }
 
+// 回归(2026-10-02 红色用例坐实线上 errno=2「参数错误」根因):带提取码分享的 Token 是 verify
+// 返回的原始 base64 randsk(字符集 [A-Za-z0-9+/=],含字面 '+'、不含 '%'),须原样上链
+// (SetQueryParams 会再编码一次);不能无条件 QueryUnescape——它把字面 '+' 当空格吃掉,
+// 约 3/4 的 randsk 抽签命中,该分享转存全数 errno=2 且无自愈路径。
+func TestBaiduShare2SaveTo_RawRandskPlusPreserved(t *testing.T) {
+	var gotSekey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		gotSekey = r.Form.Get("sekey")
+		_, _ = w.Write([]byte(`{"errno":0,"extra":{"list":[{"to":"/t/第02集.mp4","to_fs_id":900002}]}}`))
+	}))
+	defer srv.Close()
+
+	rawRandsk := "ABC+DEF/ghi123=="
+	d := &BaiduShare2{ShareId: "123", ShareUk: "456", Token: rawRandsk}
+	d.client = resty.New().SetBaseURL(srv.URL)
+	bd := &baidu_netdisk.BaiduNetdisk{}
+	bd.Cookie = "BDUSS=abc"
+	dst := &model.Object{ID: "1", Name: "剧", Path: "/t", IsFolder: true}
+
+	if _, err := d.SaveTo(context.Background(), bd, dst, []model.Obj{&model.Object{ID: "111", Name: "第01集.mp4"}}); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if gotSekey != rawRandsk {
+		t.Errorf("服务端收到的 sekey 被破坏: got %q want %q('+' 被当空格即 errno=2「参数错误」)", gotSekey, rawRandsk)
+	}
+}
+
 // 转存接口报错(errno!=0)时须把 show_msg 作为错误上抛,由调用方回退字节中转 copy。
 func TestBaiduShare2SaveTo_ApiErrorPropagates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -362,6 +390,162 @@ func TestBaiduShare2SaveTo_EmptyShareIdStillMissingSurfacesClearError(t *testing
 	}
 	if transferCalls != 0 {
 		t.Fatalf("transfer must not fire with empty shareid, got %d calls", transferCalls)
+	}
+}
+
+// getInfo 开页不得携带 BDCLND(2026-10-02 线上实证回归:带 BDCLND 落到的分享文件页是 JS 壳,
+// shareid 只作为字段名字符串出现、无任何值,数据靠浏览器 XHR 拉取——带上 BDCLND 反而让带码
+// 分享错过唯一携带 shareid 值的输码页,从「偶尔能播」变「完全不能用」)。值在匿名开到的
+// 输码页/分享页上;降级页(无 shareid)时换 web UA 重开一次,风控疑似按 UA+IP 分桶。
+func TestBaiduShare2GetInfo_RetriesWithWebUAWithoutBDCLND(t *testing.T) {
+	restoreCookie := stubAccountCookie("BDUSS=acct")
+	defer restoreCookie()
+	origDelay := baiduDegradedPageRetryDelay
+	baiduDegradedPageRetryDelay = time.Millisecond
+	defer func() { baiduDegradedPageRetryDelay = origDelay }()
+
+	degraded := `<html><head><title>安全验证</title></head><body>slide wall</body></html>`
+	good := `<html><body>shareid:"2907614368"; share_uk:"1100830236519";</body></html>`
+	type pageHit struct{ ua, cookie string }
+	var hits []pageHit
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := pageHit{r.Header.Get("User-Agent"), r.Header.Get("Cookie")}
+		hits = append(hits, h)
+		if len(hits) > 1 && h.ua == baiduWebUA {
+			_, _ = w.Write([]byte(good))
+			return
+		}
+		_, _ = w.Write([]byte(degraded))
+	}))
+	defer srv.Close()
+
+	d := &BaiduShare2{Addition: Addition{Surl: "1abc"}, Token: "tok-sekey"}
+	d.client = resty.New().SetBaseURL(srv.URL)
+	if err := d.getInfo(); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("无 shareid 降级页须触发一次 web UA 重开, got %d 次开页", len(hits))
+	}
+	for i, h := range hits {
+		if !strings.Contains(h.cookie, "BDUSS=acct") {
+			t.Fatalf("第 %d 次开页须带账号 Cookie, got %q", i+1, h.cookie)
+		}
+		if strings.Contains(h.cookie, "BDCLND=") {
+			t.Fatalf("第 %d 次开页不得携带 BDCLND(文件壳页无 shareid 值), got %q", i+1, h.cookie)
+		}
+	}
+	if hits[1].ua != baiduWebUA {
+		t.Fatalf("重开须换 web UA, got %q", hits[1].ua)
+	}
+	if d.ShareId != "2907614368" || d.ShareUk != "1100830236519" {
+		t.Fatalf("重开须补齐 shareid/uk, got %q/%q", d.ShareId, d.ShareUk)
+	}
+}
+
+// shareid 嵌法两种形态都要能解析(2026-10-02 分享页实测):JSON 裸数字 "shareid":2907614368
+// 与 JS 字面量 shareid:"2907614368";share_uk 同理(带引号两种,另见输码页实测)。
+func TestBaiduShare2GetInfo_ParsesBothShareidForms(t *testing.T) {
+	restoreCookie := stubAccountCookie("")
+	defer restoreCookie()
+
+	cases := []struct{ name, page string }{
+		{"JSON 裸数字", `<html><body>{"share_uk":"1100830236519","shareid":2907614368,"followFlag":-1}</body></html>`},
+		{"JS 字面量", `<html><body>share_uk:"1100830236519", shareid:"2907614368"};</body></html>`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(c.page))
+			}))
+			defer srv.Close()
+			d := &BaiduShare2{Addition: Addition{Surl: "1abc"}}
+			d.client = resty.New().SetBaseURL(srv.URL)
+			if err := d.getInfo(); err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if d.ShareId != "2907614368" || d.ShareUk != "1100830236519" {
+				t.Fatalf("shareid/uk 解析失败: got %q/%q", d.ShareId, d.ShareUk)
+			}
+		})
+	}
+}
+
+// 重验证后 shareid 仍解析不到(页面持续降级)时,守卫文案须携带页面标题——现场日志自己就能
+// 分界:安全验证=风控 / 请输入提取码=提取码态异常 / 正常标题但无 shareid=页面改版。
+func TestBaiduShare2SaveTo_GuardErrorCarriesPageTitle(t *testing.T) {
+	restoreCookie := stubAccountCookie("")
+	defer restoreCookie()
+	origDelay := baiduDegradedPageRetryDelay
+	baiduDegradedPageRetryDelay = time.Millisecond
+	defer func() { baiduDegradedPageRetryDelay = origDelay }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`<html><head><title>安全验证</title></head><body>degraded</body></html>`))
+	}))
+	defer srv.Close()
+
+	d := &BaiduShare2{Addition: Addition{Surl: "1abc"}, Token: "tok-but-no-shareid"}
+	d.client = resty.New().SetBaseURL(srv.URL)
+	bd := &baidu_netdisk.BaiduNetdisk{}
+	bd.Cookie = "BDUSS=abc"
+	dst := &model.Object{ID: "1", Name: "t", Path: "/t", IsFolder: true}
+
+	_, err := d.SaveTo(context.Background(), bd, dst, []model.Obj{&model.Object{ID: "111", Name: "a.nfo"}})
+	if err == nil || !strings.Contains(err.Error(), "页面标题:安全验证") {
+		t.Fatalf("守卫文案须携带页面标题, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "请稍后重试") {
+		t.Fatalf("须保留瞬时归类文案「请稍后重试」, got %v", err)
+	}
+}
+
+// List 收割 share_id/uk(2026-10-03 实测/my.jar 复刻):/share/list 响应顶层即带这对值,与
+// HTML 嵌值逐位一致;播放必经目录浏览,收割后取链时 ShareId 必然就位——降级页/模板改版/
+// 风控墙不再影响取链,HTML 解析(getInfo)降级为 Init 期第一击。
+func TestBaiduShare2List_HarvestsShareIdUk(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errno":0,"share_id":2907614368,"uk":1100830236519,` +
+			`"list":[{"fs_id":526726410289860,"isdir":0,"path":"/share/剧/1.mkv",` +
+			`"server_filename":"1.mkv","server_mtime":1700000000,"size":100}]}`))
+	}))
+	defer srv.Close()
+
+	d := &BaiduShare2{Addition: Addition{Surl: "1abc"}, Token: "tok"}
+	d.client = resty.New().SetBaseURL(srv.URL)
+	objs, err := d.List(context.Background(), &model.Object{Path: "/"}, model.ListArgs{})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(objs) != 1 {
+		t.Fatalf("expected 1 obj, got %d", len(objs))
+	}
+	if d.ShareId != "2907614368" || d.ShareUk != "1100830236519" {
+		t.Fatalf("List 须收割 share_id/uk, got %q/%q", d.ShareId, d.ShareUk)
+	}
+}
+
+// UA 分工:client 默认 web UA(verify/开页/share list 为 web 端点)后,转存仍须显式
+// netdisk UA——对齐 my.jar 复刻与百度 web 前端的端点语义。
+func TestBaiduShare2Transfer_KeepsNetdiskUA(t *testing.T) {
+	var gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`{"errno":0,"extra":{"list":[{"to":"/t/a.mp4","to_fs_id":900001}]}}`))
+	}))
+	defer srv.Close()
+
+	d := &BaiduShare2{ShareId: "123", ShareUk: "456", Token: "tok"}
+	d.client = resty.New().SetBaseURL(srv.URL).SetHeader("User-Agent", baiduWebUA)
+	bd := &baidu_netdisk.BaiduNetdisk{}
+	bd.Cookie = "BDUSS=abc"
+
+	if _, err := d.transferShare(bd, "/t", []string{"111"}); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if gotUA != "netdisk" {
+		t.Fatalf("转存须显式 netdisk UA, got %q", gotUA)
 	}
 }
 
