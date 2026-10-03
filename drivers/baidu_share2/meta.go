@@ -45,7 +45,8 @@ func validateBaiduShares() error {
 	storages := op.GetStorages("BaiduShare2")
 	log.Infof("validate %v Baidu shares", len(storages))
 	consecutive := 0
-	delay := 500 * time.Millisecond
+	initialDelay := 1 * time.Second
+	delay := initialDelay
 	for _, storage := range storages {
 		driver := storage.(*BaiduShare2)
 		if driver.ID < baseId {
@@ -72,7 +73,7 @@ func validateBaiduShares() error {
 			op.MustSaveDriverStorage(driver)
 		} else {
 			consecutive = 0
-			delay = 500 * time.Millisecond
+			delay = initialDelay
 		}
 		time.Sleep(delay)
 	}
