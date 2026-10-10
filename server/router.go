@@ -101,6 +101,8 @@ func Init(e *gin.Engine) {
 	public.Any("/settings", handles.PublicSettings)
 	public.Any("/offline_download_tools", handles.OfflineDownloadTools)
 	public.Any("/archive_extensions", handles.ArchiveExtensions)
+	public.Any("/init_status", handles.InitStatus)
+	public.POST("/init/setup", handles.InitSetup)
 
 	_fs(auth.Group("/fs"))
 	_index115(auth.Group("/index115"))
@@ -245,7 +247,7 @@ func _fs(g *gin.RouterGroup) {
 	// 创建 115 永久分享(share/send + updateshare -1,快照语义)
 	g.POST("/share/create", handles.FsShareCreate)
 	// Direct upload (client-side upload to storage)
-	g.POST("/get_direct_upload_info", middlewares.FsUp, handles.FsGetDirectUploadInfo)
+	g.POST("/get_direct_upload_info", handles.FsGetDirectUploadInfo)
 }
 
 func _task(g *gin.RouterGroup) {

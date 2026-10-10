@@ -24,8 +24,9 @@ type AliyundriveOpen struct {
 
 	DriveId string
 
-	limiter *limiter
-	ref     *AliyundriveOpen
+	limiter  *limiter
+	ref      *AliyundriveOpen
+	callback *callbackRegistration
 
 	TempDirId string
 	IsVip     bool
@@ -40,6 +41,7 @@ func (d *AliyundriveOpen) GetAddition() driver.Additional {
 }
 
 func (d *AliyundriveOpen) Init(ctx context.Context) error {
+	d.CallbackConcurrency = normalizeCallbackConcurrency(d.CallbackConcurrency)
 	d.limiter = getLimiterForUser(globalLimiterUserID) // First create a globally shared limiter to limit the initial requests.
 	if d.LIVPDownloadFormat == "" {
 		d.LIVPDownloadFormat = "jpeg"
@@ -93,6 +95,10 @@ func (d *AliyundriveOpen) InitReference(storage driver.Driver) error {
 }
 
 func (d *AliyundriveOpen) Drop(ctx context.Context) error {
+	if d.callback != nil {
+		d.callback.unregister()
+		d.callback = nil
+	}
 	d.limiter.free()
 	d.limiter = nil
 	d.ref = nil

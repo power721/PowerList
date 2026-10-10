@@ -43,7 +43,7 @@ jobs:
 
       - name: Cache Musl
         id: cache-musl
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: build/musl-libs
           key: docker-musl-libs-v2
@@ -61,7 +61,7 @@ jobs:
         run: bash build.sh release docker-multiplatform
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ env.ARTIFACT_NAME }}
           overwrite: true

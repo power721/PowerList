@@ -5,6 +5,7 @@ import (
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -410,6 +411,14 @@ func (y *Cloud189PC) Remove(ctx context.Context, obj model.Obj) error {
 	return y.WaitBatchTask("DELETE", resp.TaskID, time.Millisecond*200)
 }
 
+func familyTransferTempName(srcName string) string {
+	ext := path.Ext(srcName)
+	if ext == "" {
+		ext = ".transfer"
+	}
+	return fmt.Sprintf("0%s%s", uuid.NewString(), ext)
+}
+
 func (y *Cloud189PC) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) (newObj model.Obj, err error) {
 	if y.shouldRestoreSourceFromCAS(stream.GetName()) {
 		obj, err := y.restoreSourceFromCAS(ctx, dstDir, stream)
@@ -479,7 +488,7 @@ func (y *Cloud189PC) uploadFile(ctx context.Context, dstDir model.Obj, stream mo
 		srcName := stream.GetName()
 		stream = &WrapFileStreamer{
 			FileStreamer: stream,
-			Name:         fmt.Sprintf("0%s.transfer", uuid.NewString()),
+			Name:         familyTransferTempName(srcName),
 		}
 
 		// 使用家庭云上传

@@ -117,6 +117,10 @@ func FsMove(c *gin.Context) {
 	// ensure req.Names are not relative/traversal paths
 	safeNames := make([]string, 0, len(req.Names))
 	for _, name := range req.Names {
+		if err := checkRelativePath(name); err != nil {
+			common.ErrorResp(c, err, 403)
+			return
+		}
 		srcPath := stdpath.Join(srcDir, name)
 		if !strings.HasPrefix(srcPath+"/", srcDir) {
 			continue
@@ -222,6 +226,10 @@ func FsCopy(c *gin.Context) {
 	// ensure req.Names are not relative/traversal paths
 	safeNames := make([]string, 0, len(req.Names))
 	for _, name := range req.Names {
+		if err := checkRelativePath(name); err != nil {
+			common.ErrorResp(c, err, 403)
+			return
+		}
 		srcPath := stdpath.Join(srcDir, name)
 		if !strings.HasPrefix(srcPath+"/", srcDir) {
 			continue
@@ -379,6 +387,10 @@ func FsRemove(c *gin.Context) {
 		return
 	}
 	for _, name := range req.Names {
+		if err := checkRelativePath(name); err != nil {
+			common.ErrorResp(c, err, 403)
+			return
+		}
 		// Skip invalid item names (empty string, whitespace, ".", "/","\t\t","..") to prevent accidental removal of current directory
 		if strings.TrimSpace(utils.FixAndCleanPath(name)) == "/" {
 			utils.Log.Warnf("FsRemove: invalid item skipped: %s (parent directory: %s)\n", name, reqDir)

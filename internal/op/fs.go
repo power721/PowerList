@@ -233,7 +233,10 @@ func Link(ctx context.Context, storage driver.Driver, path string, args model.Li
 	if mode == -1 {
 		mode = storage.(driver.LinkCacheModeResolver).ResolveLinkCacheMode(path)
 	}
-	typeKey := args.Type
+	typeKey := "proxy/" + args.Type
+	if args.Redirect {
+		typeKey = "redirect/" + args.Type
+	}
 	if mode&driver.LinkCacheIP != 0 {
 		typeKey += "/" + args.IP
 	}
@@ -242,8 +245,7 @@ func Link(ctx context.Context, storage driver.Driver, path string, args model.Li
 	}
 	key := Key(storage, path)
 	if ol, exists := Cache.linkCache.GetType(key, typeKey); exists {
-		if ol.link.Expiration != nil ||
-			ol.link.SyncClosers.AcquireReference() || !ol.link.RequireReference {
+		if ol.acquire() {
 			return ol.link, ol.obj, nil
 		}
 	}
@@ -261,9 +263,12 @@ func Link(ctx context.Context, storage driver.Driver, path string, args model.Li
 		if err != nil || link == nil {
 			return nil, errors.Wrapf(err, "failed get link")
 		}
-		ol := &objWithLink{link: link, obj: file}
-		if link.Expiration != nil {
-			Cache.linkCache.SetTypeWithTTL(key, typeKey, ol, *link.Expiration)
+		ol, err := admitLink(link, file)
+		if err != nil {
+			return nil, err
+		}
+		if ol.policy.expiration != nil {
+			Cache.linkCache.SetTypeWithTTL(key, typeKey, ol, *ol.policy.expiration)
 		} else {
 			Cache.linkCache.SetTypeWithExpirable(key, typeKey, ol, &link.SyncClosers)
 		}
@@ -277,7 +282,7 @@ func Link(ctx context.Context, storage driver.Driver, path string, args model.Li
 		if ol == nil || ol.link == nil {
 			return nil, nil, errors.WithStack(errs.ObjectNotFound)
 		}
-		if ol.link.SyncClosers.AcquireReference() || !ol.link.RequireReference {
+		if ol.acquire() {
 			return ol.link, ol.obj, nil
 		}
 	}

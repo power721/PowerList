@@ -122,15 +122,15 @@ type downloader struct {
 }
 
 type ConcurrencyLimit struct {
-	_m    sync.Mutex
+	mu  sync.Mutex
 	Limit int // 需要大于0
 }
 
 var ErrExceedMaxConcurrency = HttpStatusCodeError(http.StatusTooManyRequests)
 
 func (l *ConcurrencyLimit) sub() error {
-	l._m.Lock()
-	defer l._m.Unlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if l.Limit-1 < 0 {
 		return ErrExceedMaxConcurrency
 	}
@@ -139,8 +139,8 @@ func (l *ConcurrencyLimit) sub() error {
 	return nil
 }
 func (l *ConcurrencyLimit) add() {
-	l._m.Lock()
-	defer l._m.Unlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.Limit++
 	// log.Debugf("ConcurrencyLimit.add: %d", l.Limit)
 }
@@ -202,7 +202,12 @@ func (d *downloader) download() (io.ReadCloser, error) {
 	d.pos = d.params.Range.Start
 	d.maxPos = d.params.Range.Start + d.params.Range.Length
 	d.concurrency = d.cfg.Concurrency
-	_ = d.sendChunkTask(true)
+	if err := d.sendChunkTask(true); err != nil {
+		d.cancel(err)
+		d.concurrencyFinish()
+		_ = d.interrupt()
+		return nil, err
+	}
 
 	var rc io.ReadCloser = NewMultiReadCloser(d.bufs[0], d.interrupt, d.finishBuf)
 
@@ -223,8 +228,7 @@ func (d *downloader) sendChunkTask(newConcurrency bool) error {
 				return err
 			}
 		}
-		d.concurrency--
-		go d.downloadPart()
+		// slot 扣减与 worker 启动移至分片入队之后(见下方 select),对齐官方 #3090
 	}
 
 	var buf *Buf
@@ -270,8 +274,17 @@ func (d *downloader) sendChunkTask(newConcurrency bool) error {
 		}
 		d.pos += finalSize
 		d.nextChunk++
-		d.chunkChannel <- ch
-		return nil
+		select {
+		case <-d.ctx.Done():
+			return context.Cause(d.ctx)
+		case d.chunkChannel <- ch:
+			if newConcurrency {
+				// The worker owns the acquired slot only after its chunk is queued.
+				d.concurrency--
+				go d.downloadPart()
+			}
+			return nil
+		}
 	}
 	return nil
 }
