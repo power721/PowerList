@@ -19,6 +19,7 @@ type Addition struct {
 	CustomUploadPartSize int64  `json:"custom_upload_part_size" type:"number" default:"0" help:"0 for auto"`
 	ReportRealSize       bool   `json:"report_real_size" type:"bool" default:"true" help:"Enable to report the real file size during upload"`
 	UseLargeThumbnail    bool   `json:"use_large_thumbnail" type:"bool" default:"false" help:"Enable to use large thumbnail for images"`
+	ClientType           string `json:"client_type" type:"select" options:"web,pc" default:"web" help:"Client type reported to the personal cloud API. web (9) allows uploading files up to 50 GB; pc (13) raises the single file upload limit to 500 GB."`
 
 	Concurrency int `json:"concurrency" type:"number" default:"4"`
 	ChunkSize   int `json:"chunk_size" type:"number" default:"512"`
