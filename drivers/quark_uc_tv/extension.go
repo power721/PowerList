@@ -179,20 +179,13 @@ func (d *QuarkUCTV) request2(pathname string, method string, callback base.ReqCa
 	if err != nil {
 		return nil, err
 	}
+	// 只认响应 Set-Cookie 里的新 __puus:请求头里的值是构建请求时的 d.Cookie 快照
+	// (RestyClient 无 cookie jar),若按它回写,并发请求会把另一请求刚轮换的新值覆盖回旧值。
 	__puus := cookie.GetCookie(res.Cookies(), "__puus")
 	if __puus != nil {
 		log.Debugf("update __puus: %v", __puus)
 		d.Cookie = cookie.SetStr(d.Cookie, "__puus", __puus.Value)
 		d.SaveCookie(d.Cookie)
-	} else {
-		c := res.Request.Header.Get("Cookie")
-		v1 := cookie.GetStr(d.Cookie, "__puus")
-		v2 := cookie.GetStr(c, "__puus")
-		if v2 != "" && v1 != v2 {
-			d.Cookie = cookie.SetStr(d.Cookie, "__puus", v2)
-			log.Debugf("update cookie: %v %v %v", d.Cookie, v1, v2)
-			d.SaveCookie(d.Cookie)
-		}
 	}
 
 	if e.Status >= 400 || e.Code != 0 {

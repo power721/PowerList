@@ -60,6 +60,25 @@ func updateShareCookiePuus(value string) {
 	shareCookie = cookie.SetStr(shareCookie, "__puus", value)
 }
 
+// saveQuarkPuus 把轮换的 __puus 并入网盘账号当前 Cookie 并持久化(SaveCookie 会落库
+// storage 并回写 alist-tvbox);值未变时跳过,避免并发播放重复触发落库与回写。
+func saveQuarkPuus(uc *quark.QuarkOrUC, puus string) {
+	if uc == nil || puus == "" || cookie.GetStr(uc.Cookie, "__puus") == puus {
+		return
+	}
+	log.Infof("[quark-uc-share] 账号 %d __puus 已轮换,写回账号 Cookie", uc.ID)
+	uc.SaveCookie(cookie.SetStr(uc.Cookie, "__puus", puus))
+}
+
+// saveTVPuus 同 saveQuarkPuus,作用于 TV 账号。
+func saveTVPuus(uc *quark_uc_tv.QuarkUCTV, puus string) {
+	if uc == nil || puus == "" || cookie.GetStr(uc.Cookie, "__puus") == puus {
+		return
+	}
+	log.Infof("[quark-uc-share] TV账号 %d __puus 已轮换,写回账号 Cookie", uc.ID)
+	uc.SaveCookie(cookie.SetStr(uc.Cookie, "__puus", puus))
+}
+
 // shareFileID 是 fileToObj 拼出的 "{fid}-{share_fid_token}-{pdir_fid}"。
 // 旧代码直接 strings.Split(id, "-") 取 s[1]/s[2],遇到不带 token 的 ID 会 panic。
 type shareFileID struct {
@@ -94,6 +113,10 @@ type shareRequestBinding interface {
 	link(ctx context.Context, file model.Obj, args model.LinkArgs) (*model.Link, error)
 	// cookieValue 返回该绑定账号的 Cookie,供走 drive-pc 端点的分享请求使用。
 	cookieValue() string
+	// syncPuus 把响应里轮换的 __puus 写回本绑定账号的 Cookie 并持久化。
+	// 免转存/分享请求不走 quark_uc.request(那里会自动滚 __puus),不回写的话
+	// 账号 Cookie 停在登录时刻,约一天后被夸克 CDN 判失效 → 412(#1082)。
+	syncPuus(puus string)
 }
 
 type requestBinding struct {
@@ -115,7 +138,7 @@ func (b requestBinding) doRequest(d *QuarkUCShare, pathname string, method strin
 	if b.requestDriver != nil {
 		return b.requestDriver.Request(pathname, method, callback, resp)
 	}
-	return d.directRequest(b.cookie, pathname, method, callback, resp)
+	return d.directRequest(b.cookie, pathname, method, callback, resp, nil)
 }
 
 func (b requestBinding) tempDirID() string {
@@ -203,6 +226,14 @@ func (b requestBinding) cookieValue() string {
 	return b.cookie
 }
 
+func (b requestBinding) syncPuus(puus string) {
+	if b.requestDriver == nil {
+		updateShareCookiePuus(puus)
+		return
+	}
+	saveQuarkPuus(b.requestDriver, puus)
+}
+
 type requestTVBinding struct {
 	requestDriver *quark_uc_tv.QuarkUCTV
 	cookie        string
@@ -220,7 +251,7 @@ func bindTVRequestDriver(uc *quark_uc_tv.QuarkUCTV) requestTVBinding {
 }
 
 func (b requestTVBinding) doRequest(d *QuarkUCShare, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
-	return d.directRequest(b.cookie, pathname, method, callback, resp)
+	return d.directRequest(b.cookie, pathname, method, callback, resp, b.syncPuus)
 }
 
 func (b requestTVBinding) tempDirID() string {
@@ -323,6 +354,14 @@ func (b requestTVBinding) cookieValue() string {
 	return b.cookie
 }
 
+func (b requestTVBinding) syncPuus(puus string) {
+	if b.requestDriver == nil {
+		updateShareCookiePuus(puus)
+		return
+	}
+	saveTVPuus(b.requestDriver, puus)
+}
+
 func (d *QuarkUCShare) getDriverName() string {
 	name := "Quark"
 	if d.config.Name == "UCShare" {
@@ -381,11 +420,11 @@ func (d *QuarkUCShare) request(pathname string, method string, callback base.Req
 		return uc.Request(pathname, method, callback, resp)
 	}
 
-	return d.directRequest(getShareCookie(), pathname, method, callback, resp)
+	return d.directRequest(getShareCookie(), pathname, method, callback, resp, nil)
 }
 
-func (d *QuarkUCShare) directRequest(cookieStr string, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
-	return d.requestAt(d.conf.api, cookieStr, pathname, method, callback, resp)
+func (d *QuarkUCShare) directRequest(cookieStr string, pathname string, method string, callback base.ReqCallback, resp interface{}, onPuus func(string)) ([]byte, error) {
+	return d.requestAt(d.conf.api, cookieStr, pathname, method, callback, resp, onPuus)
 }
 
 // pcApi 返回夸克/UC 分享操作的 PC 客户端端点。夸克 sharepage/save、sharepage/token、
@@ -402,15 +441,19 @@ func (d *QuarkUCShare) pcApi() string {
 // requestSharePc 用 PC 端点 + binding(账号)Cookie(无 binding 用兜底 Cookie)发分享请求。
 func (d *QuarkUCShare) requestSharePc(binding shareRequestBinding, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
 	cookieStr := getShareCookie()
+	var onPuus func(string)
 	if binding != nil {
 		if c := binding.cookieValue(); c != "" {
 			cookieStr = c
 		}
+		onPuus = binding.syncPuus
 	}
-	return d.requestAt(d.pcApi(), cookieStr, pathname, method, callback, resp)
+	return d.requestAt(d.pcApi(), cookieStr, pathname, method, callback, resp, onPuus)
 }
 
-func (d *QuarkUCShare) requestAt(api, cookieStr, pathname string, method string, callback base.ReqCallback, resp interface{}) ([]byte, error) {
+// requestAt 用指定端点与 Cookie 发请求。onPuus 非 nil 时,响应里轮换的 __puus 除更新
+// 兜底 Cookie 外,还会回调给它(供把新值写回实际发请求的账号)。
+func (d *QuarkUCShare) requestAt(api, cookieStr, pathname string, method string, callback base.ReqCallback, resp interface{}, onPuus func(string)) ([]byte, error) {
 	u := api + pathname
 	req := base.RestyClient.R()
 	req.SetHeaders(map[string]string{
@@ -447,6 +490,9 @@ func (d *QuarkUCShare) requestAt(api, cookieStr, pathname string, method string,
 	if __puus != nil {
 		log.Debugf("__puus: %v", __puus)
 		updateShareCookiePuus(__puus.Value)
+		if onPuus != nil {
+			onPuus(__puus.Value)
+		}
 	}
 	if e.Status >= 400 || e.Code != 0 {
 		return nil, errors.New(e.Message)
@@ -995,12 +1041,13 @@ var getSpeedupToken = func(d *QuarkUCShare, cookie, savedFid, fileName string) (
 // speedupDownload 走 drive-pc(PC 客户端)端点取带 token 的提速直链。
 // 关键:必须用 drive-pc.quark.cn;quark_uc 默认的 drive.quark.cn 对带 speedup token 的请求
 // 会返回 "download file size limit",只有 PC 客户端端点接受 speedup token(my.jar 也走 drive-pc)。
+// 第二个返回值是响应里轮换的 __puus(无则空串),调用方须写回账号(#1082)。
 // 声明为 var 便于单测替换(离线桩直链)。
-var speedupDownload = func(d *QuarkUCShare, cookie, savedFid, token string) (string, error) {
+var speedupDownload = func(d *QuarkUCShare, cookieStr, savedFid, token string) (string, string, error) {
 	u := "https://drive-pc.quark.cn/1/clouddrive/file/download?pr=ucpro&fr=pc"
 	req := base.RestyClient.R()
 	req.SetHeaders(map[string]string{
-		"Cookie":       cookie,
+		"Cookie":       cookieStr,
 		"User-Agent":   d.conf.ua,
 		"Referer":      d.conf.referer + "/",
 		"Content-Type": "application/json",
@@ -1012,16 +1059,20 @@ var speedupDownload = func(d *QuarkUCShare, cookie, savedFid, token string) (str
 	req.SetError(&e)
 	res, err := req.Execute(http.MethodPost, u)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	log.Debugf("[speedup] file/download(drive-pc) http=%d body=%s", res.StatusCode(), truncStr(string(res.Body()), 300))
+	newPuus := ""
+	if c := cookie.GetCookie(res.Cookies(), "__puus"); c != nil {
+		newPuus = c.Value
+	}
 	if e.Code != 0 {
-		return "", errors.New(e.Message)
+		return "", newPuus, errors.New(e.Message)
 	}
 	if len(resp.Data) == 0 || resp.Data[0].DownloadUrl == "" {
-		return "", errors.New("empty speedup download url")
+		return "", newPuus, errors.New("empty speedup download url")
 	}
-	return resp.Data[0].DownloadUrl, nil
+	return resp.Data[0].DownloadUrl, newPuus, nil
 }
 
 // speedupLink 带提速 token 取直链;任何一步失败回退 binding.link 的普通直链。
@@ -1038,20 +1089,30 @@ func (d *QuarkUCShare) speedupLink(ctx context.Context, rb requestBinding, saved
 		return rb.link(ctx, savedFile, args)
 	}
 	savedFid := savedFile.GetID()
-	token, err := getSpeedupToken(d, rb.cookie, savedFid, savedFile.GetName())
+	uc := rb.requestDriver
+	// 用账号的实时 Cookie 而非绑定快照:转存流程(uc.Request)可能刚轮换过 __puus,
+	// 快照会带旧值被 CDN 拒(412);测试桩驱动 Cookie 为空时回落快照。
+	liveCookie := func() string {
+		if uc != nil && uc.Cookie != "" {
+			return uc.Cookie
+		}
+		return rb.cookie
+	}
+	token, err := getSpeedupToken(d, liveCookie(), savedFid, savedFile.GetName())
 	if err != nil {
 		log.Warnf("[speedup] token 获取失败,回退普通直链: %v", err)
 		return rb.link(ctx, savedFile, args)
 	}
-	downloadUrl, err := speedupDownload(d, rb.cookie, savedFid, token)
+	downloadUrl, newPuus, err := speedupDownload(d, liveCookie(), savedFid, token)
 	if err != nil {
 		log.Warnf("[speedup] 带 token 的 file/download 失败,回退普通直链: %v", err)
 		return rb.link(ctx, savedFile, args)
 	}
+	// 下载域响应轮换的 __puus 写回账号并持久化(#1082),下方播放头重读新值。
+	saveQuarkPuus(uc, newPuus)
 	host := urlHost(downloadUrl)
 	// dl-c-* = 提速通道; dl-pc-* = 普通限速通道。
 	log.Infof("[speedup] 提速直链 host=%s (dl-c=加速/dl-pc=普通) fid=%s", host, savedFid)
-	uc := rb.requestDriver
 	// URL 带 #storageId 片段标记,对齐 quark_uc.getDownloadLink:alist-tvbox 按它解析取链账号
 	// 并下发匹配 Cookie。dl-c 提速直链缺此标记时客户端只能回落 master Cookie,多账号并发下
 	// 首条链常来自非 master 账号 → Cookie 归属错配被 CDN 拒(实测 412)。片段不会发往 CDN;
@@ -1059,7 +1120,7 @@ func (d *QuarkUCShare) speedupLink(ctx context.Context, rb requestBinding, saved
 	return &model.Link{
 		URL: downloadUrl + fmt.Sprintf("#storageId=%d", uc.ID),
 		Header: http.Header{
-			"Cookie":     []string{rb.cookie},
+			"Cookie":     []string{liveCookie()},
 			"Referer":    []string{d.conf.referer},
 			"User-Agent": []string{d.conf.ua},
 		},
@@ -1402,10 +1463,8 @@ func sourcesFromLinks(links []*model.Link, d *QuarkUCShare) []model.LinkSource {
 	return srcs
 }
 
-// masterCookie 取当前驱动类型主账号(master)的 Cookie。
-// 夸克 share /file/download 需账号上下文(参考脚本 quarkRequestShareDownload 用 drive.fetch 带账号),
-// 匿名请求会失败 → 回退转存。故夸克取链需带主账号 Cookie;UC 匿名即可。无账号返回 ""。
-func (d *QuarkUCShare) masterCookie() string {
+// masterDriver 取当前驱动类型主账号(master)的驱动实例,无账号返回 nil。
+func (d *QuarkUCShare) masterDriver() *quark.QuarkOrUC {
 	name := d.getDriverName()
 	prefix := conf.UC
 	if name == "Quark" {
@@ -1413,13 +1472,23 @@ func (d *QuarkUCShare) masterCookie() string {
 	}
 	storage := op.GetMasterDriver(name, prefix, 0)
 	if storage == nil {
-		return ""
+		return nil
 	}
 	uc, ok := storage.(*quark.QuarkOrUC)
 	if !ok {
-		return ""
+		return nil
 	}
-	return uc.Cookie
+	return uc
+}
+
+// masterCookie 取当前驱动类型主账号(master)的 Cookie。
+// 夸克 share /file/download 需账号上下文(参考脚本 quarkRequestShareDownload 用 drive.fetch 带账号),
+// 匿名请求会失败 → 回退转存。故夸克取链需带主账号 Cookie;UC 匿名即可。无账号返回 ""。
+func (d *QuarkUCShare) masterCookie() string {
+	if uc := d.masterDriver(); uc != nil {
+		return uc.Cookie
+	}
+	return ""
 }
 
 // resolveShareDirectLink 免转存取链:直接用分享凭据调 /file/download 换直链,
@@ -1442,10 +1511,18 @@ var resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link,
 		}
 	}
 	// 取链请求 Cookie:UC 走匿名(已验证可行);夸克 share /file/download 需账号上下文,走主账号 Cookie。
+	// 响应里轮换的 __puus 必须写回主账号并持久化(#1082):此路径不经过 quark_uc.request
+	// (那里会自动滚 __puus),不回写则账号 Cookie 停在登录时刻,约一天后被 CDN 判失效 →
+	// API 域仍成功、下载域 412;重扫码即恢复一天,循环复发。写回后下方 masterCookie()
+	// 重新读取的就是新值,播放头不再带过期 __puus。
 	isUC := d.getDriverName() == "UC"
 	reqCookie := ""
+	var onPuus func(string)
 	if !isUC {
-		reqCookie = d.masterCookie()
+		if uc := d.masterDriver(); uc != nil {
+			reqCookie = uc.Cookie
+			onPuus = func(puus string) { saveQuarkPuus(uc, puus) }
+		}
 	}
 	body := base.Json{
 		"fids":            []string{fileId},
@@ -1457,14 +1534,14 @@ var resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link,
 	var resp DownResp
 	_, err := d.requestAt(d.pcApi(), reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
 		req.SetBody(body)
-	}, &resp)
+	}, &resp, onPuus)
 	// fid_token 失效时,按 pid 重新换取 share_fid_token 后重试一次(复用 saveFile 的回退策略)。
 	if err != nil && strings.Contains(err.Error(), "token校验异常") && pid != "" {
 		if newToken, e := d.getFileToken(nil, pid, fileId); e == nil && newToken != "" {
 			body["fids_token"] = []string{newToken}
 			_, err = d.requestAt(d.pcApi(), reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
 				req.SetBody(body)
-			}, &resp)
+			}, &resp, onPuus)
 		}
 	}
 	// stoken 失效(code:50052 "st invalid"):刷新分享 stoken 后重试一次。
@@ -1475,7 +1552,7 @@ var resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link,
 			log.Infof("[share-direct] stoken 失效(50052),已刷新重试 %s", fileId)
 			_, err = d.requestAt(d.pcApi(), reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
 				req.SetBody(body)
-			}, &resp)
+			}, &resp, onPuus)
 		}
 	}
 	// 空直链自愈: 强制刷新 stoken + 按 pid 重换 fid_token 后再试一次(对齐不夜 cloud-drive.js:4906-4923)。
@@ -1487,7 +1564,7 @@ var resolveShareDirectLink = func(d *QuarkUCShare, file model.Obj) (*model.Link,
 				body["stoken"] = d.ShareToken
 				_, err = d.requestAt(d.pcApi(), reqCookie, "/file/download", http.MethodPost, func(req *resty.Request) {
 					req.SetBody(body)
-				}, &resp)
+				}, &resp, onPuus)
 			}
 		}
 	}
