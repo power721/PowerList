@@ -25,6 +25,13 @@ When drafting the pull request:
 - Do not invent testing results.
 - Do not claim validation, verification, or review steps that were not actually performed.
 
+## Official Sync
+
+When syncing official OpenList updates into this repository, update `webVersion` in `build.sh` to the official tag the synced code is based on.
+
+- Derive the tag from the sync point, not from the latest tag at merge/build time: `git describe <official-sync-commit>` in the official repo reports `vX.Y.Z-NN-g<sha>`; use `X.Y.Z`. Tags published after the sync point must not bump `webVersion`.
+- `webVersion` is a deliberate pin: upstream's dynamic `releases/latest` query is commented out in `build.sh`, so it does not update itself.
+
 ## Automated Contributions
 
 Fully automated contributions are not considered equivalent to normal community participation.
