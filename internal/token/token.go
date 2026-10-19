@@ -1,6 +1,7 @@
 package token
 
 import (
+	"fmt"
 	"strconv"
 	"time"
 
@@ -73,12 +74,27 @@ func saveAccountToken(prefix, refreshToken, accessToken string, accountId int) {
 
 func SyncTokens(id int, data base.Json) {
 	url := "http://127.0.0.1:4567/api/pan/accounts/" + strconv.Itoa(id) + "/token"
-	_, err := base.RestyClient.R().
-		SetHeader("X-API-KEY", setting.GetStr("atv_api_key")).
-		SetBody(data).
-		Post(url)
-	if err != nil {
-		log.Warnf("[%v] sync tokens failed: %v", id, err)
+	// 回写失败必须可见并重试:非 2xx 以前被静默吞掉,alist-tvbox 侧 cookie 停在旧值,
+	// 其下次重启会用旧值重建 storage,覆盖这里已轮换的新值(#1082)。
+	for attempt := 1; attempt <= 2; attempt++ {
+		res, err := base.RestyClient.R().
+			SetHeader("X-API-KEY", setting.GetStr("atv_api_key")).
+			SetBody(data).
+			Post(url)
+		if err == nil && res.IsSuccess() {
+			return
+		}
+		if err == nil {
+			body := res.String()
+			if len(body) > 200 {
+				body = body[:200]
+			}
+			err = fmt.Errorf("http %d: %s", res.StatusCode(), body)
+		}
+		log.Warnf("[%v] sync tokens failed (attempt %d/2): %v", id, attempt, err)
+		if attempt == 1 {
+			time.Sleep(time.Second)
+		}
 	}
 }
 

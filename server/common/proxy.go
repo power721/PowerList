@@ -60,9 +60,7 @@ func Proxy(w http.ResponseWriter, r *http.Request, link *model.Link, file model.
 				attachHeader(w, file, link)
 				w.Header().Set("Content-Type", detected.ContentType)
 				w.Header().Set("Etag", GetEtag(file, detected.Size))
-				return net.ServeHTTP(w, r, file.GetName(), file.ModTime(), detected.Size, &model.RangeReadCloser{
-					RangeReader: detected.RangeReader,
-				})
+				return net.ServeHTTP(w, r, file.GetName(), file.ModTime(), detected.Size, detected.RangeReader)
 			}
 		}
 	}
@@ -98,9 +96,7 @@ func proxyRangeReader(w http.ResponseWriter, r *http.Request, link *model.Link, 
 		w.Header().Set("Content-Type", detected.ContentType)
 		w.Header().Set("Etag", GetEtag(file, size))
 	}
-	return net.ServeHTTP(w, r, file.GetName(), file.ModTime(), size, &model.RangeReadCloser{
-		RangeReader: rrf,
-	})
+	return net.ServeHTTP(w, r, file.GetName(), file.ModTime(), size, rrf)
 }
 
 func attachHeader(w http.ResponseWriter, file model.Obj, link *model.Link) {
@@ -129,7 +125,8 @@ func GetEtag(file model.Obj, size int64) string {
 	if len(hash) > 0 {
 		return fmt.Sprintf(`"%s"`, hash)
 	}
-	// 参考nginx
+	// Storage backends may not preserve sub-second timestamps across cache
+	// refreshes, so only use the reproducible second precision here.
 	return fmt.Sprintf(`"%x-%x"`, file.ModTime().Unix(), size)
 }
 

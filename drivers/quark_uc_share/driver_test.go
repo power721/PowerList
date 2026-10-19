@@ -3,6 +3,8 @@ package quark_uc_share
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/cache"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
+	"github.com/OpenListTeam/OpenList/v4/pkg/cookie"
 )
 
 // stubMultiSourceDisabled 关闭多账号分片下载并还原,避免 Link() 读 setting 死锁(测试里 op 未初始化)。
@@ -395,8 +398,8 @@ func TestSpeedupLinkMarksStorageId(t *testing.T) {
 	getSpeedupToken = func(d *QuarkUCShare, cookie, savedFid, fileName string) (string, error) {
 		return "tok", nil
 	}
-	speedupDownload = func(d *QuarkUCShare, cookie, savedFid, token string) (string, error) {
-		return "https://dl-c-x.quark.cn/some/path?auth=1", nil
+	speedupDownload = func(d *QuarkUCShare, cookie, savedFid, token string) (string, string, error) {
+		return "https://dl-c-x.quark.cn/some/path?auth=1", "", nil
 	}
 	t.Cleanup(func() {
 		getSpeedupToken = origToken
@@ -454,4 +457,57 @@ func TestBindRequestDriverUsesSelectedTVStorageForRequestAndTempDir(t *testing.T
 	if binding.matches(other) {
 		t.Fatalf("expected tv binding to reject a different storage instance")
 	}
+}
+
+// requestAt 收到响应 Set-Cookie 轮换的 __puus 时,必须同时更新兜底 Cookie 与回调
+// onPuus(供调用方写回实际发请求的账号):否则账号 Cookie 停在登录时刻,约一天后
+// 被夸克 CDN 判失效 → 412(#1082)。
+func TestRequestAtRotatesPuusToFallbackAndSink(t *testing.T) {
+	var gotCookie, gotReferer string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCookie = r.Header.Get("Cookie")
+		gotReferer = r.Header.Get("Referer")
+		w.Header().Set("Set-Cookie", "__puus=rotated-new; Path=/")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":200,"code":0,"data":{}}`))
+	}))
+	defer srv.Close()
+
+	setShareCookie("__puus=old; other=1")
+	d := &QuarkUCShare{config: driver.Config{Name: "QuarkShare"}, conf: Conf{ua: "ua", referer: "https://pan.quark.cn", api: srv.URL, pr: "ucpro"}}
+
+	sinkCalls := ""
+	_, err := d.requestAt(srv.URL, "__puus=old; account=1", "/file/download", http.MethodPost, nil, nil, func(puus string) {
+		sinkCalls = puus
+	})
+	if err != nil {
+		t.Fatalf("requestAt: %v", err)
+	}
+	if sinkCalls != "rotated-new" {
+		t.Fatalf("expected onPuus sink to receive rotated value, got %q", sinkCalls)
+	}
+	if v := cookie.GetStr(getShareCookie(), "__puus"); v != "rotated-new" {
+		t.Fatalf("expected fallback shareCookie updated, got %q", v)
+	}
+	if gotCookie != "__puus=old; account=1" || gotReferer != "https://pan.quark.cn" {
+		t.Fatalf("expected request to carry account cookie + referer, got cookie=%q referer=%q", gotCookie, gotReferer)
+	}
+
+	// 无 onPuus 时兜底 Cookie 仍要更新(旧行为保持)。
+	_, err = d.requestAt(srv.URL, "", "/x", http.MethodGet, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("requestAt(no sink): %v", err)
+	}
+	if v := cookie.GetStr(getShareCookie(), "__puus"); v != "rotated-new" {
+		t.Fatalf("expected fallback shareCookie still updated without sink, got %q", v)
+	}
+}
+
+// saveQuarkPuus 值未变时不得触发落库(测试桩驱动直接构造,SaveCookie 会触碰未初始化的 op,
+// 所以只测跳过分支);新值路径由 requestAt 集成测试与线上日志覆盖。
+func TestSaveQuarkPuusSkipsUnchanged(t *testing.T) {
+	uc := &quark.QuarkOrUC{}
+	uc.Cookie = "__puus=same; a=1"
+	saveQuarkPuus(uc, "same") // 值相同:不落库,不应 panic
+	saveQuarkPuus(nil, "x")   // nil 驱动:静默跳过
 }

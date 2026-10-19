@@ -1,7 +1,9 @@
 set -e
 appName="alist"
 builtAt="$(date +'%F %T %z')"
+
 gitAuthor="power721"
+
 gitCommit=$(git log --pretty=format:"%h" -1)
 
 # Set frontend repository, default to OpenListTeam/OpenList-Frontend
@@ -98,7 +100,7 @@ AssertStaticBinary() {
   return 0
 }
 FetchWebRolling() {
-  pre_release_json=$(eval "curl -fsSL --max-time 2 $githubAuthArgs -H \"Accept: application/vnd.github.v3+json\" \"https://api.github.com/repos/$frontendRepo/releases/tags/rolling\"")
+  pre_release_json=$(eval "curl -fsSL --max-time 2 $githubAuthArgs -H \"Accept: application/vnd.github.v3+json\" \"https://api.github.com/repos/$frontendRepo/releases/tags/edge\"")
   pre_release_assets=$(echo "$pre_release_json" | jq -r '.assets[].browser_download_url')
   
   # There is no lite for rolling
@@ -536,8 +538,8 @@ BuildReleaseFreeBSD() {
     sed 's/\.0$//')
   
   if [ -z "$freebsd_version" ]; then
-    echo "Failed to get FreeBSD version, falling back to 14.3"
-    freebsd_version="14.3"
+    echo "Failed to get FreeBSD version, falling back to 14.4"
+    freebsd_version="14.4"
   fi
 
   echo "Using FreeBSD version: $freebsd_version"

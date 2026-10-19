@@ -22,11 +22,12 @@ type Addition struct {
 	LIVPDownloadFormat string `json:"livp_download_format" type:"select" options:"jpeg,mov" default:"jpeg"`
 	AccessToken        string `json:"access_token"`
 
-	AccountId     int    `json:"account_id" required:"true"`
-	RefreshToken2 string `json:"refresh_token2" required:"true"`
-	AccessToken2  string
-	Concurrency   int `json:"concurrency" type:"number" default:"4"`
-	ChunkSize     int `json:"chunk_size" type:"number" default:"256"`
+	AccountId           int    `json:"account_id" required:"true"`
+	RefreshToken2       string `json:"refresh_token2" required:"true"`
+	AccessToken2        string
+	Concurrency         int `json:"concurrency" type:"number" default:"4"`
+	ChunkSize           int `json:"chunk_size" type:"number" default:"256"`
+	CallbackConcurrency int `json:"callback_concurrency" type:"number" default:"1" help:"Maximum active proxied downloads shared by Aliyun user"`
 }
 
 var config = driver.Config{
