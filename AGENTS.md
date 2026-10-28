@@ -27,6 +27,10 @@ When drafting the pull request:
 
 ## Official Sync
 
+Official repository: https://github.com/OpenListTeam/OpenList.git
+
+git pull local repository firstly.
+
 When syncing official OpenList updates into this repository, update `webVersion` in `build.sh` to the official tag the synced code is based on.
 
 - Derive the tag from the sync point, not from the latest tag at merge/build time: `git describe <official-sync-commit>` in the official repo reports `vX.Y.Z-NN-g<sha>`; use `X.Y.Z`. Tags published after the sync point must not bump `webVersion`.
