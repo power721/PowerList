@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"github.com/google/uuid"
 	"github.com/skip2/go-qrcode"
 	"hash/crc32"
@@ -373,6 +375,7 @@ do:
 					if err != nil {
 						return nil, err
 					}
+					token.SaveAccountToken(conf.PAN123, d.Addition.AccessToken, int(d.ID))
 					isRetry = true
 					goto do
 				} else {
@@ -383,6 +386,7 @@ do:
 					// 重登拿到的新 token 落库:否则只更新内存,addition 里的 accesstoken
 					// 保持旧值直到下次存储 Init,外部消费方(如 atv 账号信息)会一直读到过期 token
 					op.MustSaveDriverStorage(d)
+					token.SaveAccountToken(conf.PAN123, d.Addition.AccessToken, int(d.ID))
 					isRetry = true
 					goto do
 				}

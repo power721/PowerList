@@ -112,6 +112,7 @@ const (
 	PAN115           = "PAN115"
 	OPEN115          = "OPEN115"
 	OPEN123          = "OPEN123"
+	PAN123           = "PAN123"
 	PAN139           = "PAN139"
 	CLOUD189         = "CLOUD189"
 	BAIDU            = "BAIDU"
