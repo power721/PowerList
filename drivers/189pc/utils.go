@@ -29,6 +29,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	"github.com/OpenListTeam/OpenList/v4/internal/stream"
+	"github.com/OpenListTeam/OpenList/v4/internal/token"
 	"github.com/OpenListTeam/OpenList/v4/pkg/errgroup"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils/random"
@@ -546,7 +547,25 @@ func (y *Cloud189PC) getSessionByRedirectURL(redirectURL string) error {
 	y.Addition.RefreshToken = tokenInfo.RefreshToken
 	y.tokenInfo = &tokenInfo
 	op.MustSaveDriverStorage(y)
+	y.syncSession()
 	return nil
+}
+
+// syncSession 把完整会话(sessionKey 体系)同步给 alist-tvbox:摸鱼等第三方插件的光云盘
+// 登录态判定只认 sessionKey 会话文件,只给账密会触发其在线 loginSubmit(常被验证码挡)。
+func (y *Cloud189PC) syncSession() {
+	if y.tokenInfo == nil || y.tokenInfo.SessionKey == "" {
+		return
+	}
+	data, err := jsoniter.Marshal(y.tokenInfo)
+	if err != nil {
+		return
+	}
+	token.SyncTokens(int(y.ID), base.Json{
+		"name":   conf.CLOUD189,
+		"token":  y.Cookie,
+		"session": string(data),
+	})
 }
 
 func (y *Cloud189PC) loginByQRCode() error {
@@ -894,6 +913,7 @@ func (y *Cloud189PC) refreshSessionWithRetry(retryCount int) (err error) {
 		return &erron
 	}
 	y.tokenInfo.UserSessionResp = userSessionResp
+	y.syncSession()
 	return nil
 }
 

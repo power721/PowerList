@@ -652,9 +652,10 @@ func (xc *XunLeiBrowserCommon) SetTokenResp(tr *TokenResp) {
 	}
 	xc.TokenResp = tr
 	data := base.Json{
-		"name":   conf.THUNDER + "_" + strconv.Itoa(int(xc.ID)),
-		"cookie": xc.captchaToken,
-		"token":  tr.AccessToken,
+		"name":         conf.THUNDER + "_" + strconv.Itoa(int(xc.ID)),
+		"cookie":       xc.captchaToken,
+		"token":        tr.AccessToken,
+		"refreshToken": tr.RefreshToken,
 	}
 	token.SyncTokens(int(xc.ID), data)
 }
