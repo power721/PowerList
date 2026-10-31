@@ -111,6 +111,14 @@ func InitConfig() {
 		conf.MaxBufferLimit = conf.Conf.MaxBufferLimit * utils.MB
 	}
 	log.Infof("max buffer limit: %dMB", conf.MaxBufferLimit/utils.MB)
+	// 多账号分片读窗口:<0(默认)取 64MB;0 不限;>0 按配置。旧 config.json 缺该键,
+	// DefaultConfig 预填 -1 经 Unmarshal 保留,升级即自动获得窗口限制。
+	if conf.Conf.ReadAheadLimitMB > 0 {
+		conf.ReadAheadLimit = conf.Conf.ReadAheadLimitMB * utils.MB
+	} else if conf.Conf.ReadAheadLimitMB == 0 {
+		conf.ReadAheadLimit = 0
+	}
+	log.Infof("read ahead limit: %dMB", conf.ReadAheadLimit/utils.MB)
 	if conf.Conf.MmapThreshold > 0 {
 		conf.MmapThreshold = conf.Conf.MmapThreshold * utils.MB
 	} else {

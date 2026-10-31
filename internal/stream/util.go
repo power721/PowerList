@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
@@ -207,6 +208,7 @@ func newMultiSourceRangeReader(size int64, link *model.Link) model.RangeReaderIF
 		slots := make([]multiSourceSlot, len(chunks))
 		for i := range slots {
 			slots[i].ready = make(chan struct{})
+			slots[i].start = chunks[i].start
 		}
 
 		// 信号量控制 worker 并发为 totalConcurrency;信号量在 worker 退出时释放。
@@ -248,9 +250,22 @@ func newMultiSourceRangeReader(size int64, link *model.Link) model.RangeReaderIF
 			}()
 		}
 
-		// 调度器:满并发地启动所有分片(信号量自动限流),ctx 取消时收尾。
+		reader := &multiSourceReader{
+			ctx:    ctx,
+			slots:  slots,
+			cancel: cancel,
+			start:  rangeStart,
+			// 消费进度初值=本次 Range 起点:seek 场景分片起点即偏移,闸门按相对距离判断。
+			advance: make(chan struct{}, 1),
+		}
+		reader.consumed.Store(httpRange.Start)
+
+		// 调度器:启动分片(信号量限并发 + 读窗口限预跑),ctx 取消时收尾。
 		go func() {
 			for i := range chunks {
+				if !reader.waitForReadAhead(chunks[i].start) {
+					return
+				}
 				select {
 				case sem <- struct{}{}:
 				case <-ctx.Done():
@@ -259,13 +274,6 @@ func newMultiSourceRangeReader(size int64, link *model.Link) model.RangeReaderIF
 				launch(i)
 			}
 		}()
-
-		reader := &multiSourceReader{
-			ctx:    ctx,
-			slots:  slots,
-			cancel: cancel,
-			start:  rangeStart,
-		}
 		// reader.Close 应等 worker 退出并取消残余请求。
 		reader.wg = &wg
 		log.Debugf("[multi-source] RangeRead 启动 start=%d chunks=%d", httpRange.Start, len(chunks))
@@ -276,6 +284,7 @@ func newMultiSourceRangeReader(size int64, link *model.Link) model.RangeReaderIF
 
 // multiSourceSlot 是单个 subChunk 的下载结果槽。
 type multiSourceSlot struct {
+	start int64 // subChunk 在整个文件中的绝对起点
 	buf   []byte
 	err   error
 	ready chan struct{}
@@ -291,6 +300,27 @@ type multiSourceReader struct {
 	wg     *sync.WaitGroup
 	start  time.Time // RangeRead 启动时刻,用于首字节耗时
 	logged bool      // 是否已打首字节日志
+	// consumed 为客户端已消费到的绝对偏移,advance 为前进通知(容量1,非阻塞发)。
+	// 二者供读窗口闸门使用:上游比客户端快时调度器在窗口边界挂起,而不是无限预跑。
+	consumed atomic.Int64
+	advance  chan struct{}
+}
+
+// waitForReadAhead 读窗口闸门:分片起点距客户端已消费位置超过 conf.ReadAheadLimit 字节时
+// 挂起等待 Read 前进唤醒。窗口<=0 时不限(保持旧的满速预跑行为)。返回 false 表示 ctx 已取消。
+func (r *multiSourceReader) waitForReadAhead(start int64) bool {
+	window := int64(conf.ReadAheadLimit)
+	if window <= 0 {
+		return true
+	}
+	for start >= r.consumed.Load()+window {
+		select {
+		case <-r.advance:
+		case <-r.ctx.Done():
+			return false
+		}
+	}
+	return true
 }
 
 func (r *multiSourceReader) Read(p []byte) (int, error) {
@@ -321,9 +351,17 @@ func (r *multiSourceReader) Read(p []byte) (int, error) {
 		}
 		n := copy(p, slot.buf[r.off:])
 		r.off += n
+		// 先记进度再清 buf/游标:cur++ 重置 off 前把消费位置定格在 slot.start+off。
+		r.consumed.Store(slot.start + int64(r.off))
+		select {
+		case r.advance <- struct{}{}:
+		default:
+		}
 		if r.off >= len(slot.buf) {
 			r.cur++
 			r.off = 0
+			// 整片消费完及时断开引用,GC 不必等到整个 reader 生命周期结束才回收。
+			slot.buf = nil
 		}
 		if n > 0 && !r.logged {
 			r.logged = true
