@@ -256,6 +256,7 @@ func InitialSettings() []model.SettingItem {
 		{Key: conf.DeleteDelayTime, Value: "900", Type: conf.TypeNumber, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: conf.ExternalPort, Value: "5344", Type: conf.TypeNumber, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: conf.AliTo115, Value: "false", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
+		{Key: conf.AliTo115Fallback, Value: "true", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: conf.AliTo123, Value: "false", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: conf.Pan115To123, Value: "false", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},
 		{Key: conf.QuarkTo123, Value: "false", Type: conf.TypeBool, Group: model.SINGLE, Flag: model.PRIVATE},

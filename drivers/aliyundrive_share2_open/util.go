@@ -312,7 +312,11 @@ func (d *AliyundriveShare2Open) getFiles(fileId string) ([]File, error) {
 
 func (d *AliyundriveShare2Open) saveTo115(ctx context.Context, pan115 *_115.Pan115, file model.Obj, link *model.Link, args model.LinkArgs) (*model.Link, error) {
 	if ok, err := pan115.UploadAvailable(); err != nil || !ok {
-		return link, err
+		if err == nil {
+			err = errors.New("115 upload unavailable")
+		}
+		log.Warnf("[%v] 115 upload unavailable: %v", pan115.ID, err)
+		return nil, err
 	}
 	log.Debugf("save file to 115 cloud: file=%v dir=%v", file.GetID(), pan115.TempDirId)
 	fs := &stream.FileStream{
@@ -323,7 +327,7 @@ func (d *AliyundriveShare2Open) saveTo115(ctx context.Context, pan115 *_115.Pan1
 	ss, err := stream.NewSeekableStream(fs, link)
 	if err != nil {
 		log.Warnf("NewSeekableStream failed: %v", err)
-		return link, err
+		return nil, err
 	}
 
 	preHash := "2EF7BDE608CE5404E97D5F042F95F89F1C232871"
@@ -332,7 +336,7 @@ func (d *AliyundriveShare2Open) saveTo115(ctx context.Context, pan115 *_115.Pan1
 	res, err := pan115.RapidUpload(fs.GetSize(), fs.GetName(), pan115.TempDirId, preHash, fullHash, ss)
 	if err != nil {
 		log.Warnf("[%v] 115 upload failed: %v", pan115.ID, err)
-		return link, err
+		return nil, err
 	}
 	log.Debugf("115.RapidUpload: %v", res)
 	go d.delayDelete115(pan115, fullHash)
@@ -356,8 +360,8 @@ func (d *AliyundriveShare2Open) saveTo115(ctx context.Context, pan115 *_115.Pan1
 			PartSize:    pan115.ChunkSize * utils.KB,
 		}, nil
 	}
-	log.Warnf("获取115链接超时，使用阿里链接")
-	return link, err
+	log.Warnf("获取115链接超时: %v", err)
+	return nil, fmt.Errorf("获取115链接超时: %w", err)
 }
 
 func (d *AliyundriveShare2Open) delayDelete115(pan115 *_115.Pan115, fileId string) {

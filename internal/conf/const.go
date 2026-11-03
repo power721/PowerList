@@ -120,6 +120,7 @@ const (
 	UC_TV            = "UC_TV"
 	GUANGYA          = "GUANGYA"
 	AliTo115         = "ali_to_115"
+	AliTo115Fallback = "ali_to_115_fallback"
 	AliTo123         = "ali_to_123"
 	Pan115To123      = "115_to_123"
 	QuarkTo123       = "quark_to_123"

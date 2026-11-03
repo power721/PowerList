@@ -2,6 +2,7 @@ package aliyundrive_share2_open
 
 import (
 	"context"
+	"errors"
 	_115 "github.com/OpenListTeam/OpenList/v4/drivers/115"
 	_123rapid "github.com/OpenListTeam/OpenList/v4/drivers/123_rapid"
 	"github.com/OpenListTeam/OpenList/v4/drivers/base"
@@ -35,6 +36,10 @@ var aliyundriveShareAliTo115Enabled = func() bool {
 	return setting.GetBool(conf.AliTo115)
 }
 
+var aliyundriveShareAliTo115FallbackEnabled = func() bool {
+	return setting.GetBool(conf.AliTo115Fallback)
+}
+
 var aliyundriveShareAliTo123Enabled = func() bool {
 	return setting.GetBool(conf.AliTo123)
 }
@@ -63,7 +68,12 @@ var rapidAliTo123 = func(ctx context.Context, file *MyFile) *model.Link {
 }
 
 func aliyundriveShareLinkCacheKey(fileID string) string {
-	return fileID + "|" + strconv.FormatBool(aliyundriveShareAliTo115Enabled()) + "|" + strconv.FormatBool(aliyundriveShareAliTo123Enabled())
+	key := fileID + "|" + strconv.FormatBool(aliyundriveShareAliTo115Enabled()) + "|" + strconv.FormatBool(aliyundriveShareAliTo123Enabled())
+	// 回退开关只在秒传115开启时影响链接结果;追加进 key 让切换开关后旧缓存(可能含回退的阿里直链)立即失效并重试115
+	if aliyundriveShareAliTo115Enabled() {
+		key += "|" + strconv.FormatBool(aliyundriveShareAliTo115FallbackEnabled())
+	}
+	return key
 }
 
 var resolveAliyundriveShareLink = func(ctx context.Context, d *AliyundriveShare2Open, file model.Obj, args model.LinkArgs) (*model.Link, error) {
@@ -187,6 +197,7 @@ func (d *AliyundriveShare2Open) aliLink(file model.Obj) (*model.Link, *MyFile, e
 
 func (d *AliyundriveShare2Open) p115Link(ctx context.Context, link *model.Link, file model.Obj, args model.LinkArgs) (*model.Link, error) {
 	count := op.GetDriverCount("115 Cloud")
+	var lastErr error
 	for i := 0; i < count; i++ {
 		driver115 := op.Get115Driver(idx2)
 		idx2++
@@ -195,11 +206,28 @@ func (d *AliyundriveShare2Open) p115Link(ctx context.Context, link *model.Link, 
 			if err2 == nil {
 				return link115, nil
 			}
+			lastErr = err2
 		} else {
 			break
 		}
 	}
-	return link, nil
+	return fallbackToAliLink(link, lastErr)
+}
+
+// fallbackToAliLink 决定秒传115失败后的去向:回退开关开启时保持旧行为返回阿里直链;
+// 关闭时把错误抛出去(不缓存,后续请求会重新尝试115),适配无115会员阿里账号回退后无法播放的场景。
+func fallbackToAliLink(link *model.Link, lastErr error) (*model.Link, error) {
+	if aliyundriveShareAliTo115FallbackEnabled() {
+		if lastErr != nil {
+			log.Warnf("秒传115失败，回退阿里直链: %v", lastErr)
+		}
+		return link, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("没有可用的115账号")
+	}
+	log.Warnf("秒传115失败且已关闭回退阿里直链: %v", lastErr)
+	return nil, lastErr
 }
 
 func (d *AliyundriveShare2Open) Other(ctx context.Context, args model.OtherArgs) (interface{}, error) {
