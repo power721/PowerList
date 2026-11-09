@@ -32,6 +32,18 @@ type AliyundriveShare2Open struct {
 
 var aliyundriveShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
 
+// setShareLinkCache 按直链自带寿命入缓存:阿里 OSS 签名直链仅存活约 900s(getOpenLink 已带
+// Expiration=895s),无视 Expiration 一律缓存 1h 会让已过期直链在 15~60 分钟窗口内被持续复用,
+// 表现为 /p/ 请求稳定 403、重启才恢复(#1092)。无 Expiration 的链接(115/123 转存链等)
+// 维持原有 1 小时上限。
+func setShareLinkCache(key string, link *model.Link) {
+	if link.Expiration != nil && *link.Expiration > 0 && *link.Expiration < time.Hour {
+		aliyundriveShareLinkCache.SetWithTTL(key, link, *link.Expiration)
+		return
+	}
+	aliyundriveShareLinkCache.Set(key, link)
+}
+
 var aliyundriveShareAliTo115Enabled = func() bool {
 	return setting.GetBool(conf.AliTo115)
 }
@@ -158,7 +170,7 @@ func (d *AliyundriveShare2Open) Link(ctx context.Context, file model.Obj, args m
 
 	link, err := resolveAliyundriveShareLink(ctx, d, file, args)
 	if err == nil && link != nil {
-		aliyundriveShareLinkCache.Set(key, link)
+		setShareLinkCache(key, link)
 	}
 	return link, err
 }

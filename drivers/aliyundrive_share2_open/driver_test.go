@@ -179,3 +179,66 @@ func TestAliyundriveShareLinkCacheKey_FallbackOnlyMattersWhenAliTo115Enabled(t *
 		t.Fatalf("expected different cache buckets for fallback states, got %q", key)
 	}
 }
+
+func TestAliyundriveShare2OpenLink_HonorsLinkExpiration(t *testing.T) {
+	origCache := aliyundriveShareLinkCache
+	origResolver := resolveAliyundriveShareLink
+	origAliTo115 := aliyundriveShareAliTo115Enabled
+	origAliTo123 := aliyundriveShareAliTo123Enabled
+	origFallback := aliyundriveShareAliTo115FallbackEnabled
+	aliyundriveShareLinkCache = cache.NewKeyedCache[*model.Link](time.Hour)
+	resolveCalls := 0
+	exp := 100 * time.Millisecond
+	resolveAliyundriveShareLink = func(ctx context.Context, d *AliyundriveShare2Open, file model.Obj, args model.LinkArgs) (*model.Link, error) {
+		resolveCalls++
+		if file.GetID() == "expired" {
+			return &model.Link{URL: "https://example.com/oss", Expiration: &exp}, nil
+		}
+		return &model.Link{URL: "https://example.com/115"}, nil
+	}
+	t.Cleanup(func() {
+		aliyundriveShareLinkCache = origCache
+		resolveAliyundriveShareLink = origResolver
+		aliyundriveShareAliTo115Enabled = origAliTo115
+		aliyundriveShareAliTo123Enabled = origAliTo123
+		aliyundriveShareAliTo115FallbackEnabled = origFallback
+	})
+
+	aliyundriveShareAliTo123Enabled = func() bool { return false }
+	aliyundriveShareAliTo115Enabled = func() bool { return false }
+	aliyundriveShareAliTo115FallbackEnabled = func() bool { return true }
+	d := &AliyundriveShare2Open{}
+
+	ossFile := &model.Object{ID: "expired", Name: "README.md"}
+	first, err := d.Link(context.Background(), ossFile, model.LinkArgs{})
+	if err != nil {
+		t.Fatalf("first oss link: %v", err)
+	}
+	second, err := d.Link(context.Background(), ossFile, model.LinkArgs{})
+	if err != nil {
+		t.Fatalf("second oss link: %v", err)
+	}
+	if first.URL != second.URL {
+		t.Fatalf("expected cached oss link reuse, got %q and %q", first.URL, second.URL)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, err = d.Link(context.Background(), ossFile, model.LinkArgs{}); err != nil {
+		t.Fatalf("third oss link: %v", err)
+	}
+	if resolveCalls != 2 {
+		t.Fatalf("expired oss link should be re-resolved after link expiration, resolve calls=%d", resolveCalls)
+	}
+
+	// 无 Expiration 的链接(115/123 转存链)不因此提前淘汰。
+	panFile := &model.Object{ID: "pan", Name: "video.mp4"}
+	if _, err = d.Link(context.Background(), panFile, model.LinkArgs{}); err != nil {
+		t.Fatalf("pan link: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, err = d.Link(context.Background(), panFile, model.LinkArgs{}); err != nil {
+		t.Fatalf("pan link reuse: %v", err)
+	}
+	if resolveCalls != 3 {
+		t.Fatalf("link without expiration should stay cached, resolve calls=%d", resolveCalls)
+	}
+}
