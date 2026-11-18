@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	stdpath "path"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/OpenListTeam/OpenList/v4/internal/conf"
 	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -152,12 +154,15 @@ func (d *Local) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([
 
 func (d *Local) FileInfoToObj(ctx context.Context, f fs.FileInfo, reqPath string, fullPath string) model.Obj {
 	thumb := ""
-	if d.Thumbnail {
-		if d.supportsThumbnail(f.Name()) {
-			thumb = common.GetApiUrl(ctx) + stdpath.Join("/d", reqPath, f.Name())
-			thumb = utils.EncodePath(thumb, true)
-			thumb += "?type=thumb&sign=" + sign.Sign(stdpath.Join(reqPath, f.Name()))
+	if d.Thumbnail && d.supportsThumbnail(f.Name()) {
+		base, ok := ctx.Value(conf.ThumbnailBaseURLKey).(*url.URL)
+		if !ok {
+			base = &url.URL{
+				Path:     stdpath.Join("/d", reqPath),
+				RawQuery: url.Values{"type": {"thumb"}, "sign": {sign.Sign(stdpath.Join(reqPath, f.Name()))}}.Encode(),
+			}
 		}
+		thumb = common.GetApiUrl(ctx) + base.JoinPath(url.PathEscape(f.Name())).String()
 	}
 	isFolder := f.IsDir() || isSymlinkDir(f, fullPath)
 	var size int64

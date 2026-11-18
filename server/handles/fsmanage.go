@@ -64,6 +64,7 @@ type MoveCopyReq struct {
 	Overwrite    bool     `json:"overwrite"`
 	SkipExisting bool     `json:"skip_existing"`
 	Merge        bool     `json:"merge"`
+	FollowSeed   bool     `json:"follow_seed"`
 }
 
 // FsMove performs batch move (individual item permission checks skipped for performance).
@@ -159,6 +160,14 @@ func FsMove(c *gin.Context) {
 		if err != nil {
 			common.ErrorResp(c, err, 500)
 			return
+		}
+		if req.FollowSeed {
+			seedTasks, followErr := followSeedTransfer(c, "move", stdpath.Join(srcDir, name), dstDir)
+			if followErr != nil {
+				common.ErrorResp(c, followErr, 500)
+				return
+			}
+			addedTasks = append(addedTasks, seedTasks...)
 		}
 	}
 
@@ -278,6 +287,14 @@ func FsCopy(c *gin.Context) {
 			common.ErrorResp(c, err, 500)
 			return
 		}
+		if req.FollowSeed {
+			seedTasks, followErr := followSeedTransfer(c, "copy", stdpath.Join(srcDir, name), dstDir)
+			if followErr != nil {
+				common.ErrorResp(c, followErr, 500)
+				return
+			}
+			addedTasks = append(addedTasks, seedTasks...)
+		}
 	}
 
 	// Return immediately with task information
@@ -294,9 +311,10 @@ func FsCopy(c *gin.Context) {
 }
 
 type RenameReq struct {
-	Path      string `json:"path"`
-	Name      string `json:"name"`
-	Overwrite bool   `json:"overwrite"`
+	Path       string `json:"path"`
+	Name       string `json:"name"`
+	Overwrite  bool   `json:"overwrite"`
+	FollowSeed bool   `json:"follow_seed"`
 }
 
 func FsRename(c *gin.Context) {
@@ -341,6 +359,12 @@ func FsRename(c *gin.Context) {
 		common.ErrorResp(c, err, 500)
 		return
 	}
+	if req.FollowSeed {
+		if err := followSeedRename(c, reqPath, req.Name); err != nil {
+			common.ErrorResp(c, err, 500)
+			return
+		}
+	}
 	common.SuccessResp(c)
 }
 
@@ -352,8 +376,9 @@ func checkRelativePath(path string) error {
 }
 
 type RemoveReq struct {
-	Dir   string   `json:"dir"`
-	Names []string `json:"names"`
+	Dir        string   `json:"dir"`
+	Names      []string `json:"names"`
+	FollowSeed bool     `json:"follow_seed"`
 }
 
 // FsRemove performs batch remove (individual item permission checks skipped for performance).
@@ -401,14 +426,86 @@ func FsRemove(c *gin.Context) {
 			utils.Log.Warnf("FsRemove: path traversal attempt skipped: %s (dir: %s)\n", name, req.Dir)
 			continue
 		}
+		source, _ := fs.Get(c.Request.Context(), fullPath, &fs.GetArgs{NoLog: true})
 		err := fs.Remove(c.Request.Context(), fullPath)
 		if err != nil {
 			common.ErrorResp(c, err, 500)
 			return
 		}
+		if req.FollowSeed && source != nil && !source.IsDir() {
+			if err = followSeedRemove(c, fullPath); err != nil {
+				common.ErrorResp(c, err, 500)
+				return
+			}
+		}
 	}
 	//fs.ClearCache(req.Dir)
 	common.SuccessResp(c)
+}
+
+func seedSidecarPaths(filePath string) []string {
+	return []string{filePath + ".oss", filePath + ".torrent", filePath + ".cas", filePath + ".cas.torrent"}
+}
+
+func followSeedTransfer(c *gin.Context, operation, srcPath, dstDir string) ([]task.TaskExtensionInfo, error) {
+	source, err := fs.Get(c.Request.Context(), srcPath, &fs.GetArgs{NoLog: true})
+	if err != nil || source == nil || source.IsDir() {
+		return nil, nil
+	}
+	var tasks []task.TaskExtensionInfo
+	for _, sidecarPath := range seedSidecarPaths(srcPath) {
+		obj, err := fs.Get(c.Request.Context(), sidecarPath, &fs.GetArgs{NoLog: true})
+		if err != nil || obj == nil || obj.IsDir() {
+			continue
+		}
+		var current task.TaskExtensionInfo
+		switch operation {
+		case "copy":
+			current, err = fs.Copy(c.Request.Context(), sidecarPath, dstDir, true)
+		case "move":
+			current, err = fs.Move(c.Request.Context(), sidecarPath, dstDir, true)
+		default:
+			return nil, fmt.Errorf("unsupported seed sidecar operation %q", operation)
+		}
+		if err != nil {
+			return tasks, fmt.Errorf("%s seed sidecar %s: %w", operation, sidecarPath, err)
+		}
+		if current != nil {
+			tasks = append(tasks, current)
+		}
+	}
+	return tasks, nil
+}
+
+func followSeedRename(c *gin.Context, srcPath, newName string) error {
+	source, err := fs.Get(c.Request.Context(), srcPath, &fs.GetArgs{NoLog: true})
+	if err != nil || source == nil || source.IsDir() {
+		return nil
+	}
+	for _, sidecarPath := range seedSidecarPaths(srcPath) {
+		obj, err := fs.Get(c.Request.Context(), sidecarPath, &fs.GetArgs{NoLog: true})
+		if err != nil || obj == nil || obj.IsDir() {
+			continue
+		}
+		suffix := strings.TrimPrefix(sidecarPath, srcPath)
+		if err = fs.Rename(c.Request.Context(), sidecarPath, newName+suffix, true); err != nil {
+			return fmt.Errorf("rename seed sidecar %s: %w", sidecarPath, err)
+		}
+	}
+	return nil
+}
+
+func followSeedRemove(c *gin.Context, srcPath string) error {
+	for _, sidecarPath := range seedSidecarPaths(srcPath) {
+		obj, err := fs.Get(c.Request.Context(), sidecarPath, &fs.GetArgs{NoLog: true})
+		if err != nil || obj == nil || obj.IsDir() {
+			continue
+		}
+		if err = fs.Remove(c.Request.Context(), sidecarPath); err != nil {
+			return fmt.Errorf("remove seed sidecar %s: %w", sidecarPath, err)
+		}
+	}
+	return nil
 }
 
 type RemoveEmptyDirectoryReq struct {

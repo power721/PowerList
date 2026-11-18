@@ -25,9 +25,9 @@ func fakeResolveMeta(metas map[string]*model.Meta) func(string) (*model.Meta, er
 func TestIsSearchNodeAccessible(t *testing.T) {
 	tests := []struct {
 		name         string
+		basePath     string
 		metas        map[string]*model.Meta
 		node         model.SearchNode
-		basePath     string
 		want         bool
 		wantMetaPath string
 	}{
