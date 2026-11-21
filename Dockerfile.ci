@@ -1,11 +1,11 @@
 ARG BASE_IMAGE_TAG=base
 # 上游 xiaoyaliu/alist 基于 Alpine 3.17.10 minirootfs(python3 3.10,yt-dlp 需 3.11+):
-# 系统层在此用 Alpine 3.22 等价重建,文件层(data.zip 配置包/docker.version/updateall)从上游继承。
+# 系统层在此用 Alpine 3.24 等价重建(python3 3.14),文件层(data.zip 配置包/docker.version/updateall)从上游继承。
 # 上游 apk 层内容参照其层历史:sqlite unzip bash curl gzip ripgrep busybox-extras nginx
 # nginx-mod-http-js nginx-mod-http-lua apache2-utils jq tzdata + 时区 + rg 替换 grep hack
 FROM xiaoyaliu/alist:latest AS xiaoya
 
-FROM alpine:3.22
+FROM alpine:3.24
 LABEL MAINTAINER="power721"
 ARG TARGETPLATFORM
 ARG INSTALL_FFMPEG=false
