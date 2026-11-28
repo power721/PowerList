@@ -3,10 +3,10 @@
 package bootstrap
 
 import (
-	"github.com/glebarez/sqlite"
+	"github.com/OpenListTeam/OpenList/v4/internal/db/sqlitepool"
 	"gorm.io/gorm"
 )
 
 func openSQLite(dsn string) gorm.Dialector {
-	return sqlite.Open(dsn)
+	return sqlitepool.Open(dsn)
 }
